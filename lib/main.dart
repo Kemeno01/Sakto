@@ -2,15 +2,20 @@
 // Needs two packages: flutter pub add shared_preferences google_fonts
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'ai_config.dart';
 import 'supabase_config.dart';
 
 part 'auth.dart';
 part 'drawer.dart';
+part 'scanner.dart';
 
 // ============================================================
 // 1. CONSTANTS & HELPERS
@@ -302,6 +307,14 @@ class AppState extends ChangeNotifier {
   void addItem(String name, double price, int qty, String bucket) => mut(() {
     items.add(Item(nid++, name, price, bucket, qty: qty));
     if (tab != 1 && tab != 2) { tab = 1; sel = {}; }
+  });
+  void addScannedItems(List<(String, double, int)> list, String bucket, {bool checked = true, double discount = 0, double fee = 0}) => mut(() {
+    for (final (name, price, qty) in list) {
+      items.add(Item(nid++, name, price, bucket, qty: qty, checked: checked));
+    }
+    if (discount > 0) spOf(bucket).disc += discount;
+    if (fee > 0) spOf(bucket).fee += fee;
+    tab = 1; sel = {bucket};
   });
 
   // ---- tags ----
@@ -707,7 +720,7 @@ class Shell extends StatelessWidget {
             key: shellKey, drawer: const ProfileDrawer(),
             body: pages[app.tab],
             floatingActionButton: FloatingActionButton(
-                onPressed: () => showSheet(c, const AddItemSheet()),
+                onPressed: () => showSheet(c, const AddChoiceSheet()),
                 backgroundColor: kLil, foregroundColor: Colors.white, shape: const CircleBorder(), child: const Icon(Icons.add, size: 32)),
             floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
             bottomNavigationBar: BottomAppBar(
