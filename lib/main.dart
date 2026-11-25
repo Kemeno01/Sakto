@@ -5,12 +5,26 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'supabase_config.dart';
+
+part 'auth.dart';
+part 'drawer.dart';
 
 // ============================================================
 // 1. CONSTANTS & HELPERS
 // ============================================================
-const kInk = Color(0xFF1B1630), kMut = Color(0xFF6B6580), kPr = Color(0xFF7B4DEB);
-const kBg = Color(0xFFF6F5F9), kLn = Color(0xFFEEECF3), kLil = Color(0xFF9B6BFF), kWr = Color(0xFFC2410C);
+const kPr = Color(0xFF7B4DEB), kLil = Color(0xFF9B6BFF), kWr = Color(0xFFC2410C);
+// theme-aware colors (Settings → Appearance switches between light and dark)
+bool get isDark => app.dark;
+Color get kInk => isDark ? const Color(0xFFEDEAF6) : const Color(0xFF1B1630); // main text
+Color get kMut => isDark ? const Color(0xFFA8A2BD) : const Color(0xFF6B6580); // muted text
+Color get kBg => isDark ? const Color(0xFF110F18) : const Color(0xFFF6F5F9); // page background
+Color get kLn => isDark ? const Color(0xFF2B2738) : const Color(0xFFEEECF3); // lines / input fill
+Color get kCard => isDark ? const Color(0xFF1C1927) : Colors.white; // cards, sheets, dialogs
+Color get kSel => isDark ? const Color(0xFF2F2650) : const Color(0xFFF4F0FF); // selected option
+Color get kDeep => isDark ? const Color(0xFF2A2340) : const Color(0xFF1B1630); // dark summary box
 const kW18 = Color(0x2EFFFFFF), kW35 = Color(0x59FFFFFF);
 const w6 = FontWeight.w600, w7 = FontWeight.w700;
 const kMonths = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -105,7 +119,6 @@ class Rng { String preset, from, to; Rng(this.preset, this.from, this.to); }
 // 3. APP STATE (saved on the phone)
 // ============================================================
 class AppState extends ChangeNotifier {
-  static const _key = 'spent-to-sawa-flutter-v1';
   final DateTime now = DateTime.now();
   late final String today = dkey(now);
   double cash = 0; int nid = 1, tn = 0;
@@ -115,6 +128,48 @@ class AppState extends ChangeNotifier {
   // screen state (not saved)
   int tab = 0; Set<String> sel = {}; String? splitTag; String an = 'Expenses'; bool cmp = true; String? lastAdded;
   late Rng rng = presetRange('month');
+
+  // ---- profile & settings (separate key, so "Reset all data" keeps your account and theme) ----
+  static const _pkey = 'sakto-profile-v1';
+  String? accountId, userName, userEmail, avatarUrl; String authMode = 'local'; bool dark = false;
+  bool get signedIn => userName != null;
+  String? get _dataKey => accountId == null ? null : 'sakto-data-v1-$accountId';
+
+  Future<void> saveProfile() async {
+    try {
+      await (await SharedPreferences.getInstance()).setString(_pkey,
+          jsonEncode({'id': accountId, 'name': userName, 'email': userEmail, 'avatar': avatarUrl, 'mode': authMode, 'dark': dark}));
+    } catch (_) {}
+  }
+  void _prof(VoidCallback f) { f(); saveProfile(); notifyListeners(); }
+  void _clearMemory() {
+    cash = 0; nid = 1; tn = 0; items = []; buckets = []; tc = {}; bcash = {}; sp = {}; inc = []; hist = {};
+    tab = 0; sel = {}; splitTag = null; rng = presetRange('month');
+  }
+  Future<void> setProfile({required String id, required String name, String? email, String? avatar, String mode = 'local'}) async {
+    accountId = id; userName = name; userEmail = email; avatarUrl = avatar; authMode = mode;
+    await saveProfile();
+    await loadAccountData();
+  }
+  void rename(String n) => _prof(() => userName = n);
+  void setDark(bool v) => _prof(() => dark = v);
+  Future<void> clearProfile({bool erase = false}) async {
+    final k = _dataKey;
+    if (erase && k != null) {
+      try { await (await SharedPreferences.getInstance()).remove(k); } catch (_) {}
+    }
+    _clearMemory();
+    accountId = null; userName = null; userEmail = null; avatarUrl = null; authMode = 'local';
+    await saveProfile();
+    notifyListeners();
+  }
+  // everyone you added in the Split tab (all tags), without "Me"
+  List<String> get allPeople {
+    final s = <String>{};
+    for (final b in buckets) { for (final p in sp[b]?.people ?? const <String>[]) { if (p != 'Me') s.add(p); } }
+    return s.toList();
+  }
+  List<String> tagsOf(String p) => buckets.where((b) => sp[b]?.people.contains(p) ?? false).toList();
 
   // ---- save / load ----
   Map<String, dynamic> toJson() => {
@@ -126,28 +181,60 @@ class AppState extends ChangeNotifier {
   };
   Future<void> load() async {
     try {
-      final raw = (await SharedPreferences.getInstance()).getString(_key);
-      if (raw == null) return;
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      cash = (j['cash'] as num).toDouble(); nid = j['nid'] as int; tn = j['tn'] as int;
-      buckets = (j['buckets'] as List).cast<String>();
-      tc = (j['tc'] as Map).map((k, v) => MapEntry(k as String, v as int));
-      bcash = (j['bcash'] as Map?)?.map((k, v) => MapEntry(k as String, (v as num).toDouble())) ?? {};
-      items = (j['items'] as List).map((e) => Item.fromJson(e as Map<String, dynamic>)).toList();
-      sp = (j['sp'] as Map).map((k, v) => MapEntry(k as String, SplitCfg.fromJson(v as Map<String, dynamic>)));
-      inc = (j['inc'] as List).map((e) => Income((e as List)[0] as String, (e[1] as num).toDouble())).toList();
-      hist = (j['hist'] as Map).map((k, v) => MapEntry(k as String, HistDay.fromJson(v as Map<String, dynamic>)));
+      final prefs = await SharedPreferences.getInstance();
+      final pr = prefs.getString(_pkey);
+      if (pr != null) {
+        final m = jsonDecode(pr) as Map<String, dynamic>;
+        accountId = m['id'] as String?;
+        userName = m['name'] as String?; userEmail = m['email'] as String?; avatarUrl = m['avatar'] as String?;
+        authMode = (m['mode'] as String?) ?? 'local'; dark = m['dark'] == true;
+        if (accountId == null && userName != null && authMode == 'local') {
+          accountId = 'local_${userName!.trim().toLowerCase()}';
+        }
+      }
+      await loadAccountData();
     } catch (_) {}
   }
+  void _applyJson(Map<String, dynamic> j) {
+    cash = (j['cash'] as num?)?.toDouble() ?? 0;
+    nid = (j['nid'] as int?) ?? 1;
+    tn = (j['tn'] as int?) ?? 0;
+    buckets = ((j['buckets'] as List?) ?? []).cast<String>();
+    tc = ((j['tc'] as Map?) ?? {}).map((k, v) => MapEntry(k as String, v as int));
+    bcash = (j['bcash'] as Map?)?.map((k, v) => MapEntry(k as String, (v as num).toDouble())) ?? {};
+    items = ((j['items'] as List?) ?? []).map((e) => Item.fromJson(e as Map<String, dynamic>)).toList();
+    sp = ((j['sp'] as Map?) ?? {}).map((k, v) => MapEntry(k as String, SplitCfg.fromJson(v as Map<String, dynamic>)));
+    inc = ((j['inc'] as List?) ?? []).map((e) => Income((e as List)[0] as String, (e[1] as num).toDouble())).toList();
+    hist = ((j['hist'] as Map?) ?? {}).map((k, v) => MapEntry(k as String, HistDay.fromJson(v as Map<String, dynamic>)));
+  }
+
+  Future<void> loadAccountData() async {
+    _clearMemory();
+    final k = _dataKey;
+    if (k == null) { notifyListeners(); return; }
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(k);
+      if (raw != null) _applyJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {}
+    if (authMode == 'google') {
+      final cloud = await fetchCloudData();
+      if (cloud != null && cloud.isNotEmpty) {
+        _applyJson(cloud);
+        try { await (await SharedPreferences.getInstance()).setString(k, jsonEncode(cloud)); } catch (_) {}
+      }
+    }
+    notifyListeners();
+  }
   Future<void> save() async {
-    try { await (await SharedPreferences.getInstance()).setString(_key, jsonEncode(toJson())); } catch (_) {}
+    final k = _dataKey;
+    if (k == null) return;
+    final data = toJson();
+    try { await (await SharedPreferences.getInstance()).setString(k, jsonEncode(data)); } catch (_) {}
+    if (authMode == 'google') syncCloudData(data);
   }
   void mut(VoidCallback f) { f(); save(); notifyListeners(); }
   void ui(VoidCallback f) { f(); notifyListeners(); }
-  void resetAll() => mut(() {
-    cash = 0; nid = 1; tn = 0; items = []; buckets = []; tc = {}; bcash = {}; sp = {}; inc = []; hist = {};
-    tab = 0; sel = {}; splitTag = null; rng = presetRange('month');
-  });
+  void resetAll() => mut(_clearMemory);
 
   // ---- basics ----
   List<Color> col(String b) => kPal[(tc[b] ?? 0) % kPal.length];
@@ -367,7 +454,7 @@ void toast(String m) {
   final o = navKey.currentState?.overlay;
   if (o == null) return;
   final e = OverlayEntry(builder: (_) => Positioned(left: 0, right: 0, bottom: 110,
-      child: IgnorePointer(child: Center(child: Material(color: kInk, borderRadius: BorderRadius.circular(20),
+      child: IgnorePointer(child: Center(child: Material(color: const Color(0xFF1B1630), borderRadius: BorderRadius.circular(20),
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Text(m, style: const TextStyle(color: Colors.white, fontSize: 12))))))));
   o.insert(e);
   Future.delayed(const Duration(milliseconds: 1900), () => e.remove());
@@ -376,11 +463,11 @@ void toast(String m) {
 // ============================================================
 // 4. SMALL REUSABLE WIDGETS
 // ============================================================
-TextStyle ts(double s, {FontWeight w = FontWeight.w400, Color c = kInk}) => TextStyle(fontSize: s, fontWeight: w, color: c);
+TextStyle ts(double s, {FontWeight w = FontWeight.w400, Color? c}) => TextStyle(fontSize: s, fontWeight: w, color: c ?? kInk);
 Widget gap(double h) => SizedBox(height: h);
 
-Widget cardBox(Widget child, {EdgeInsets p = const EdgeInsets.all(14), EdgeInsets m = EdgeInsets.zero, Color color = Colors.white, double r = 16, Border? border}) =>
-    Container(margin: m, padding: p, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(r), border: border), child: child);
+Widget cardBox(Widget child, {EdgeInsets p = const EdgeInsets.all(14), EdgeInsets m = EdgeInsets.zero, Color? color, double r = 16, Border? border}) =>
+    Container(margin: m, padding: p, decoration: BoxDecoration(color: color ?? kCard, borderRadius: BorderRadius.circular(r), border: border), child: child);
 
 Widget progress(int pct, {Color track = kW35, Color fill = Colors.white}) => ClipRRect(
     borderRadius: BorderRadius.circular(3),
@@ -394,8 +481,8 @@ Widget bigBtn(String t, VoidCallback f, {bool white = false, Color? bg}) => Size
     child: ElevatedButton(
         onPressed: f,
         style: ElevatedButton.styleFrom(
-            backgroundColor: bg ?? (white ? Colors.white : kPr), foregroundColor: white ? kInk : Colors.white, elevation: 0,
-            side: white ? const BorderSide(color: kLn) : null, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+            backgroundColor: bg ?? (white ? kCard : kPr), foregroundColor: white ? kInk : Colors.white, elevation: 0,
+            side: white ? BorderSide(color: kLn) : null, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
         child: Text(t, style: ts(15, w: w6, c: white ? kInk : Colors.white))));
 
 InputDecoration deco(String hint) => InputDecoration(
@@ -416,7 +503,7 @@ class TagChip extends StatelessWidget {
 Widget dotAv(String p, double z) {
   final c = pcOf(p);
   return Container(width: z, height: z, alignment: Alignment.center,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: c[0], border: Border.all(color: Colors.white, width: 2)),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: c[0], border: Border.all(color: kCard, width: 2)),
       child: Text(p.isEmpty ? '?' : p[0].toUpperCase(), style: ts(12, w: w7, c: c[1])));
 }
 Widget avStack(List<String> ps, double z) {
@@ -455,7 +542,7 @@ class _NumFieldState extends State<NumField> {
 }
 
 Future<T?> showSheet<T>(BuildContext c, Widget child) => showModalBottomSheet<T>(
-    context: c, isScrollControlled: true, useSafeArea: true, backgroundColor: Colors.white,
+    context: c, isScrollControlled: true, useSafeArea: true, backgroundColor: kCard,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
     builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
@@ -467,7 +554,7 @@ Future<T?> showSheet<T>(BuildContext c, Widget child) => showModalBottomSheet<T>
             ]))));
 
 Widget closeBtn(BuildContext c) => InkWell(onTap: () => Navigator.pop(c), borderRadius: BorderRadius.circular(20),
-    child: Container(width: 40, height: 40, alignment: Alignment.center, decoration: const BoxDecoration(color: kLn, shape: BoxShape.circle), child: const Icon(Icons.close, size: 18)));
+    child: Container(width: 40, height: 40, alignment: Alignment.center, decoration: BoxDecoration(color: kLn, shape: BoxShape.circle), child: const Icon(Icons.close, size: 18)));
 
 Widget label(String t) => Padding(padding: const EdgeInsets.only(top: 14, bottom: 6), child: Text(t, style: ts(11, w: w6)));
 
@@ -481,12 +568,12 @@ Widget titleRow(String t, VoidCallback onBack, {Widget? trailing}) => Padding(
     padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
       Flexible(child: InkWell(onTap: onBack, child: Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Text('← $t', style: ts(20, w: w6), overflow: TextOverflow.ellipsis)))),
-      if (trailing != null) trailing,
+      ?trailing,
     ]));
 
 Widget softBtn(String t, VoidCallback f) => OutlinedButton(
     onPressed: f,
-    style: OutlinedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: kMut, side: const BorderSide(color: kLn), minimumSize: const Size(0, 36),
+    style: OutlinedButton.styleFrom(backgroundColor: kCard, foregroundColor: kMut, side: BorderSide(color: kLn), minimumSize: const Size(0, 36),
         padding: const EdgeInsets.symmetric(horizontal: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
     child: Text(t, style: ts(11, w: w6, c: kMut)));
 
@@ -496,21 +583,31 @@ Widget softBtn(String t, VoidCallback f) => OutlinedButton(
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await app.load();
+  await initAuth();
   runApp(const SpentApp());
 }
+
+final shellKey = GlobalKey<ScaffoldState>();
 
 class SpentApp extends StatelessWidget {
   const SpentApp({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-      title: 'Spent-To-Sawa', debugShowCheckedModeBanner: false, navigatorKey: navKey,
-      theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: kPr),
-          scaffoldBackgroundColor: kBg,
-          textTheme: GoogleFonts.poppinsTextTheme(),
-          popupMenuTheme: const PopupMenuThemeData(color: Colors.white)),
-      home: const Shell());
+  Widget build(BuildContext context) => ListenableBuilder(
+      listenable: app,
+      builder: (_, _) {
+        final br = isDark ? Brightness.dark : Brightness.light;
+        final base = ThemeData(useMaterial3: true, brightness: br);
+        return MaterialApp(
+            title: 'Sakto', debugShowCheckedModeBanner: false, navigatorKey: navKey,
+            theme: base.copyWith(
+                colorScheme: ColorScheme.fromSeed(seedColor: kPr, brightness: br),
+                scaffoldBackgroundColor: kBg,
+                textTheme: GoogleFonts.poppinsTextTheme(base.textTheme),
+                popupMenuTheme: PopupMenuThemeData(color: kCard),
+                dialogTheme: DialogThemeData(backgroundColor: kCard),
+                bottomSheetTheme: BottomSheetThemeData(backgroundColor: kCard)),
+            home: const AuthGate());
+      });
 }
 
 class Shell extends StatelessWidget {
@@ -527,13 +624,14 @@ class Shell extends StatelessWidget {
                   Icon(ic, color: app.tab == i ? kInk : kMut), Text(t, style: ts(10, w: app.tab == i ? w7 : FontWeight.w500, c: app.tab == i ? kInk : kMut)),
                 ])));
         return Scaffold(
+            key: shellKey, drawer: const ProfileDrawer(),
             body: pages[app.tab],
             floatingActionButton: FloatingActionButton(
                 onPressed: () => showSheet(c, const AddItemSheet()),
                 backgroundColor: kLil, foregroundColor: Colors.white, shape: const CircleBorder(), child: const Icon(Icons.add, size: 32)),
             floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
             bottomNavigationBar: BottomAppBar(
-                color: Colors.white, shape: const CircularNotchedRectangle(), notchMargin: 8, height: 64, padding: EdgeInsets.zero,
+                color: kCard, shape: const CircularNotchedRectangle(), notchMargin: 8, height: 64, padding: EdgeInsets.zero,
                 child: Row(children: [
                   nav(0, Icons.home_rounded, 'Home'), nav(1, Icons.format_list_bulleted_rounded, 'Lists'),
                   const SizedBox(width: 76),
@@ -567,8 +665,7 @@ class _HomeState extends State<HomePage> {
                   padding: EdgeInsets.fromLTRB(18, MediaQuery.of(c).padding.top + 14, 18, 0),
                   child: Column(children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      InkWell(onTap: () => showSheet(c, const UserSheet()), customBorder: const CircleBorder(),
-                          child: Container(width: 40, height: 40, alignment: Alignment.center, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle), child: Text('J', style: ts(14, w: w6)))),
+                      InkWell(onTap: () => shellKey.currentState?.openDrawer(), customBorder: const CircleBorder(), child: userAvatar(40)),
                       InkWell(onTap: () => setState(() => strip = !strip), borderRadius: BorderRadius.circular(18),
                           child: Container(height: 36, padding: const EdgeInsets.symmetric(horizontal: 18), alignment: Alignment.center,
                               decoration: BoxDecoration(color: kW18, borderRadius: BorderRadius.circular(18)),
@@ -613,7 +710,7 @@ class _HomeState extends State<HomePage> {
               gap(18),
               Container(
                   width: double.infinity, padding: const EdgeInsets.fromLTRB(16, 18, 16, 110),
-                  decoration: const BoxDecoration(color: kBg, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                  decoration: BoxDecoration(color: kBg, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('Your Buckets', style: ts(16, w: w6)), gap(10),
                     if (app.buckets.isEmpty)
@@ -656,20 +753,6 @@ class _HomeState extends State<HomePage> {
 void budgetAlert() {
   final l = app.left;
   toast(app.cash == 0 ? 'Set your cash on hand first' : (l >= 0 ? '${fmt(l)} left of your ${fmt(app.cash)} cap' : 'Over your cap by ${fmt(-l)}'));
-}
-
-class UserSheet extends StatelessWidget {
-  const UserSheet({super.key});
-  @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text('Spent-To-Sawa', style: ts(18, w: w7)), gap(4),
-    Text('Your data is saved on this device only.', style: ts(11, c: kMut)), gap(14),
-    bigBtn('Reset all data', () async {
-      final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(backgroundColor: Colors.white, title: const Text('Reset everything?'), content: const Text('This erases all items, tags, history and settings.'),
-          actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Erase'))]));
-      if (ok == true) { app.resetAll(); if (context.mounted) Navigator.pop(context); }
-    }, bg: const Color(0xFFD50000)),
-  ]);
 }
 
 // ============================================================
@@ -785,7 +868,7 @@ class _CalState extends State<CalendarSheet> {
                     child: Container(margin: const EdgeInsets.all(2), alignment: Alignment.center,
                         decoration: BoxDecoration(color: sel ? kPr : null, borderRadius: BorderRadius.circular(12), border: (k == app.today && !sel) ? Border.all(color: kPr, width: 2) : null),
                         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          Text('$d', style: ts(13, w: saved ? w7 : FontWeight.w500, c: sel ? Colors.white : const Color(0xFF3B3650))),
+                          Text('$d', style: ts(13, w: saved ? w7 : FontWeight.w500, c: sel ? Colors.white : kInk)),
                           if (saved) Icon(Icons.circle, size: 4, color: sel ? Colors.white : kPr),
                         ])));
               }),
@@ -873,8 +956,8 @@ class ListsPage extends StatelessWidget {
         if (cap > 0) { for (final i in L) { if (!i.checked && app.myAmt(i) > left) { next = i; break; } } }
         Widget chip(String b, bool on, VoidCallback f) => Padding(padding: const EdgeInsets.only(right: 8), child: InkWell(onTap: f, borderRadius: BorderRadius.circular(18),
             child: Container(padding: const EdgeInsets.symmetric(horizontal: 18), alignment: Alignment.center,
-                decoration: BoxDecoration(color: on ? kInk : Colors.white, borderRadius: BorderRadius.circular(18)),
-                child: Text(b, style: ts(12, w: FontWeight.w500, c: on ? Colors.white : kInk)))));
+                decoration: BoxDecoration(color: on ? kInk : kCard, borderRadius: BorderRadius.circular(18)),
+                child: Text(b, style: ts(12, w: FontWeight.w500, c: on ? kCard : kInk)))));
         return SafeArea(bottom: false, child: ListView(padding: const EdgeInsets.only(bottom: 110), children: [
           titleRow('Weekend grocery', () => app.go(0), trailing: softBtn('Edit Tag', () => showSheet(c, const TagsSheet()))),
           SizedBox(height: 38, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 18), children: [
@@ -920,7 +1003,7 @@ class ItemRow extends StatelessWidget {
           if (app.isSplit(i.bucket) && (app.myAmt(i) - i.amt).abs() > 0.005) Text('of ${fmt(i.amt)} · shared', style: ts(10, c: kMut)),
         ]),
         PopupMenuButton<String>(
-            icon: const Icon(Icons.more_horiz, color: kInk),
+            icon: Icon(Icons.more_horiz, color: kInk),
             onSelected: (v) {
               switch (v) {
                 case 'edit': editItemDialog(context, i); break;
@@ -942,7 +1025,7 @@ void editItemDialog(BuildContext c, Item i) {
   final nameC = TextEditingController(text: i.name), priceC = TextEditingController(text: numStr(i.price));
   int q = i.qty;
   showDialog(context: c, builder: (ctx) => StatefulBuilder(builder: (ctx, set) => AlertDialog(
-      backgroundColor: Colors.white, title: const Text('Edit Item'),
+      backgroundColor: kCard, title: const Text('Edit Item'),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Name')),
         TextField(controller: priceC, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price (₱)')),
@@ -959,13 +1042,13 @@ void editItemDialog(BuildContext c, Item i) {
 }
 
 void catDialog(BuildContext c, Item i) => showDialog(context: c, builder: (ctx) => SimpleDialog(
-    backgroundColor: Colors.white, title: const Text('Change Category'),
+    backgroundColor: kCard, title: const Text('Change Category'),
     children: app.buckets.isEmpty
         ? [const Padding(padding: EdgeInsets.all(20), child: Text('No tags yet. Create one with Edit Tag.'))]
         : [for (final b in app.buckets) SimpleDialogOption(onPressed: () { app.setCat(i, b); Navigator.pop(ctx); }, child: Align(alignment: Alignment.centerLeft, child: TagChip(b)))]));
 
 void delDialog(BuildContext c, Item i) => showDialog(context: c, builder: (ctx) => AlertDialog(
-    backgroundColor: Colors.white, title: const Text('Delete Item'), content: Text('Delete "${i.name}"?'),
+    backgroundColor: kCard, title: const Text('Delete Item'), content: Text('Delete "${i.name}"?'),
     actions: [
       TextButton(onPressed: () { app.delItem(i); Navigator.pop(ctx); toast('Item deleted'); }, child: const Text('Yes', style: TextStyle(color: kWr))),
       TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('No')),
@@ -1012,7 +1095,7 @@ class _AddItemState extends State<AddItemSheet> {
           for (final b in app.buckets)
             InkWell(onTap: () => setState(() => bucket = b), borderRadius: BorderRadius.circular(20),
                 child: Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
-                    decoration: BoxDecoration(color: bucket == b ? const Color(0xFFD0D0D0) : null, borderRadius: BorderRadius.circular(20)),
+                    decoration: BoxDecoration(color: bucket == b ? kSel : null, borderRadius: BorderRadius.circular(20)),
                     child: Text(b, style: ts(12, w: bucket == b ? w7 : FontWeight.w500)))),
         ]),
         gap(12),
@@ -1052,7 +1135,7 @@ class _TagsState extends State<TagsSheet> {
             onSelected: (v) async {
               if (v == 'edit') { setState(() { ren = b; tt.text = b; }); return; }
               final n = app.items.where((x) => x.bucket == b).length;
-              final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(backgroundColor: Colors.white,
+              final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(backgroundColor: kCard,
                   title: const Text('Delete Tag'), content: Text('Delete "$b"${n > 0 ? ' and its $n item${n > 1 ? 's' : ''}' : ''}?'),
                   actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Delete', style: TextStyle(color: kWr)))]));
               if (ok == true) { app.delTag(b); toast('Tag deleted'); }
@@ -1121,7 +1204,7 @@ class SplitModeSheet extends StatelessWidget {
     Widget opt(String m, String t, String d) => Padding(padding: const EdgeInsets.only(top: 10), child: InkWell(
         onTap: () { app.startSplit(tag, m); Navigator.pop(context); }, borderRadius: BorderRadius.circular(14),
         child: Container(width: double.infinity, padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(color: s.mode == m ? const Color(0xFFF4F0FF) : Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: s.mode == m ? kPr : const Color(0xFFE6E3F2), width: s.mode == m ? 2 : 1)),
+            decoration: BoxDecoration(color: s.mode == m ? kSel : kCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: s.mode == m ? kPr : kLn, width: s.mode == m ? 2 : 1)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t, style: ts(15, w: w7)), const SizedBox(height: 2), Text(d, style: ts(11, c: kMut))]))));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1196,7 +1279,7 @@ class _TripState extends State<TripSplitter> {
           gap(8), Text('Shared in proportion to what each person ordered.', style: ts(11, c: kMut)),
         ])),
         gap(12),
-        Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: kInk, borderRadius: BorderRadius.circular(16)),
+        Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: kDeep, borderRadius: BorderRadius.circular(16)),
             child: Column(children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Still to collect', style: ts(12, c: Colors.white)), Text(fmt(collect), style: ts(18, w: w7, c: Colors.white))]),
@@ -1217,8 +1300,8 @@ class _TripState extends State<TripSplitter> {
     final s = app.spOf(i.bucket), P = app.owners(i), each = '${fmt(i.amt / P.length)} each';
     String lab; Color col, bar;
     if (P.length == 1) { lab = 'Only ${P[0]} · not split'; col = bar = pcOf(P[0])[1]; }
-    else if (P.length == s.people.length) { lab = 'Everyone · $each'; col = const Color(0xFF4B4B63); bar = const Color(0xFFB8B4CC); }
-    else { lab = 'Shared by ${P.join(', ')} · $each'; col = const Color(0xFF4B4B63); bar = const Color(0xFFB8B4CC); }
+    else if (P.length == s.people.length) { lab = 'Everyone · $each'; col = kMut; bar = const Color(0xFFB8B4CC); }
+    else { lab = 'Shared by ${P.join(', ')} · $each'; col = kMut; bar = const Color(0xFFB8B4CC); }
     return InkWell(
         onTap: () {
           if (s.mode == 'equal') { toast('Switch to Itemized to choose who ordered what'); return; }
@@ -1321,7 +1404,7 @@ class _GivenState extends State<CashGivenSheet> {
               : chg > 0.005 ? 'Change to give back: ${fmt(chg)}'
               : chg >= -0.005 ? 'Exact amount. No change needed.'
               : 'Short by ${fmt(-chg)}', style: ts(14, w: w7, c: (v > 0 && chg < -0.005) ? kWr : kInk)),
-          color: const Color(0xFFF4F0FF), r: 14, p: const EdgeInsets.all(12)),
+          color: kSel, r: 14, p: const EdgeInsets.all(12)),
       gap(14),
       bigBtn('Save', () {
         if (v <= 0) { toast('Enter the amount given'); return; }
@@ -1350,7 +1433,7 @@ class _OwnerState extends State<OwnerSheet> {
     Widget opt(String m, String t, String d) => Padding(padding: const EdgeInsets.only(top: 8), child: InkWell(
         onTap: () => setState(() { mode = m; if (m == 'one') who = who.take(1).toList(); }), borderRadius: BorderRadius.circular(14),
         child: Container(width: double.infinity, padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: mode == m ? const Color(0xFFF4F0FF) : Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: mode == m ? kPr : const Color(0xFFE6E3F2), width: mode == m ? 2 : 1)),
+            decoration: BoxDecoration(color: mode == m ? kSel : kCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: mode == m ? kPr : kLn, width: mode == m ? 2 : 1)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t, style: ts(14, w: w7)), Text(d, style: ts(11, c: kMut))]))));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1365,8 +1448,8 @@ class _OwnerState extends State<OwnerSheet> {
         for (final p in pp)
           InkWell(onTap: () => pick(p), borderRadius: BorderRadius.circular(22),
               child: Container(padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
-                  decoration: BoxDecoration(color: (mode != 'all' && who.contains(p)) ? pcOf(p)[0] : Colors.white, borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: (mode != 'all' && who.contains(p)) ? pcOf(p)[1] : const Color(0xFFE6E3F2), width: (mode != 'all' && who.contains(p)) ? 2 : 1)),
+                  decoration: BoxDecoration(color: (mode != 'all' && who.contains(p)) ? pcOf(p)[0] : kCard, borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: (mode != 'all' && who.contains(p)) ? pcOf(p)[1] : kLn, width: (mode != 'all' && who.contains(p)) ? 2 : 1)),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [dotAv(p, 28), const SizedBox(width: 8), Text(p, style: ts(13, w: w6))]))),
       ]),
       gap(14),
@@ -1376,7 +1459,7 @@ class _OwnerState extends State<OwnerSheet> {
               : (mode == 'one'
               ? Text.rich(TextSpan(children: [TextSpan(text: '${fmt(it.amt)} → ${P[0]} only.\n', style: ts(13, w: w7)), TextSpan(text: 'Not included in anyone else’s share.', style: ts(13))]))
               : Text('${fmt(it.amt)} ÷ ${P.length} = ${fmt(it.amt / P.length)} each', style: ts(13, w: w7))),
-          color: const Color(0xFFF4F0FF), r: 14, p: const EdgeInsets.all(12)),
+          color: kSel, r: 14, p: const EdgeInsets.all(12)),
       gap(14),
       bigBtn('Done', () {
         if (mode != 'all' && who.isEmpty) { toast('Pick at least one person'); return; }
@@ -1430,7 +1513,7 @@ class StatsPage extends StatelessWidget {
             : rows.map((r) => Group(r.name, r.amt, kPr)).toList();
         const presets = {'7d': '7 days', '30d': '30 days', 'month': 'This month', '3m': '3 months', 'custom': 'Custom'};
         Widget seg(String t, bool on, String v) => Expanded(child: InkWell(onTap: () => app.setAn(v), borderRadius: BorderRadius.circular(18),
-            child: Container(height: 38, alignment: Alignment.center, decoration: BoxDecoration(color: on ? Colors.white : null, borderRadius: BorderRadius.circular(18)), child: Text(t, style: ts(15, w: w6)))));
+            child: Container(height: 38, alignment: Alignment.center, decoration: BoxDecoration(color: on ? kCard : null, borderRadius: BorderRadius.circular(18)), child: Text(t, style: ts(15, w: w6)))));
         return SafeArea(bottom: false, child: ListView(padding: const EdgeInsets.fromLTRB(18, 0, 18, 110), children: [
           titleRow('Analytics & Report', () => app.go(0)),
           InkWell(onTap: () => showSheet(c, const RangeSheet()), borderRadius: BorderRadius.circular(16),
@@ -1444,8 +1527,8 @@ class StatsPage extends StatelessWidget {
                   onTap: () { if (e.key == 'custom') { app.ui(() => app.rng.preset = 'custom'); showSheet(c, const RangeSheet()); } else { app.setPreset(e.key); } },
                   borderRadius: BorderRadius.circular(18),
                   child: Container(height: 36, padding: const EdgeInsets.symmetric(horizontal: 16), alignment: Alignment.center,
-                      decoration: BoxDecoration(color: rg.preset == e.key ? kInk : Colors.white, borderRadius: BorderRadius.circular(18), border: rg.preset == e.key ? null : Border.all(color: const Color(0xFFE6E3F2))),
-                      child: Text(e.value, style: ts(12, w: FontWeight.w500, c: rg.preset == e.key ? Colors.white : kInk))))),
+                      decoration: BoxDecoration(color: rg.preset == e.key ? kInk : kCard, borderRadius: BorderRadius.circular(18), border: rg.preset == e.key ? null : Border.all(color: kLn)),
+                      child: Text(e.value, style: ts(12, w: FontWeight.w500, c: rg.preset == e.key ? kCard : kInk))))),
           ])),
           gap(12),
           Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(22)), child: Row(children: [seg('Expenses', ex, 'Expenses'), seg('Income', !ex, 'Income')])),
@@ -1503,7 +1586,7 @@ class BarsPainter extends CustomPainter {
       final h = math.max(bars[k].v / mx * (base - 12), 2.0), x = 10 + k * gapW + (gapW - bw) / 2;
       if (bars[k].v > 0) c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, base - h, bw, h), const Radius.circular(3)), Paint()..color = k == top ? kPr : const Color(0xFFCFC2FF));
       if (k % every == 0) {
-        final tp = TextPainter(text: TextSpan(text: bars[k].label, style: const TextStyle(fontSize: 9, color: kMut)), textDirection: TextDirection.ltr)..layout();
+        final tp = TextPainter(text: TextSpan(text: bars[k].label, style: TextStyle(fontSize: 9, color: kMut)), textDirection: TextDirection.ltr)..layout();
         tp.paint(c, Offset(x + bw / 2 - tp.width / 2, base + 6));
       }
     }
@@ -1545,7 +1628,7 @@ class RangeSheet extends StatelessWidget {
     Widget dateBox(String t, String v, bool isFrom) => Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(t, style: ts(11, c: kMut)), gap(4),
       InkWell(onTap: () => pick(isFrom), borderRadius: BorderRadius.circular(10),
-          child: Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFDDD8F0)), borderRadius: BorderRadius.circular(10)),
+          child: Container(width: double.infinity, padding: const EdgeInsets.all(12), decoration: BoxDecoration(border: Border.all(color: kLn), borderRadius: BorderRadius.circular(10)),
               child: Text('${dayLabel(v)}, ${toD(v).year}', style: ts(13, w: w7)))),
     ]));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1555,7 +1638,7 @@ class RangeSheet extends StatelessWidget {
         for (final e in pl.entries)
           InkWell(onTap: () => e.key == 'custom' ? app.ui(() => rg.preset = 'custom') : app.setPreset(e.key), borderRadius: BorderRadius.circular(18),
               child: Container(height: 40, padding: const EdgeInsets.symmetric(horizontal: 16), alignment: Alignment.center,
-                  decoration: BoxDecoration(color: rg.preset == e.key ? const Color(0xFFF4F0FF) : Colors.white, borderRadius: BorderRadius.circular(20), border: Border.all(color: rg.preset == e.key ? kPr : const Color(0xFFE6E3F2), width: rg.preset == e.key ? 2 : 1)),
+                  decoration: BoxDecoration(color: rg.preset == e.key ? kSel : kCard, borderRadius: BorderRadius.circular(20), border: Border.all(color: rg.preset == e.key ? kPr : kLn, width: rg.preset == e.key ? 2 : 1)),
                   child: Text(e.value, style: ts(12, w: w7, c: rg.preset == e.key ? const Color(0xFF5B2FD0) : kInk)))),
       ]),
       gap(16),

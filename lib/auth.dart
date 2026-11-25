@@ -1,0 +1,219 @@
+part of 'main.dart';
+
+// ============================================================
+// 12. ACCOUNTS (offline name, or Google through Supabase)
+// ============================================================
+bool _sbOk = false;
+SupabaseClient? get sb => _sbOk ? Supabase.instance.client : null;
+
+Future<void> initAuth() async {
+  if (!supabaseReady) return;
+  try {
+    await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseAnonKey);
+    _sbOk = true;
+    // Fires when the user comes back from the Google page (deep link) and when a saved session is restored.
+    sb!.auth.onAuthStateChange.listen((data) {
+      final u = data.session?.user;
+      if (u == null) return;
+      if (data.event == AuthChangeEvent.signedIn || (data.event == AuthChangeEvent.initialSession && !app.signedIn)) _onGoogleUser(u);
+    });
+  } catch (e) {
+    debugPrint('Supabase init failed: $e');
+  }
+}
+
+Future<void> _onGoogleUser(User u) async {
+  final m = u.userMetadata ?? {};
+  final googleName = (m['full_name'] ?? m['name'] ?? u.email?.split('@').first ?? 'Friend').toString();
+  // keep a name the user already edited for this same account
+  final keep = app.authMode == 'google' && app.userEmail == u.email && app.userName != null;
+  final wasIn = app.signedIn && app.authMode == 'google';
+  await app.setProfile(
+      id: 'google_${u.id}',
+      name: keep ? app.userName! : googleName,
+      email: u.email,
+      avatar: (m['avatar_url'] ?? m['picture']) as String?,
+      mode: 'google');
+  syncProfile();
+  if (!wasIn) toast('Signed in as ${app.userName}');
+}
+
+/// Saves the account to the Supabase `profiles` table (see SUPABASE_SETUP.md).
+Future<void> syncProfile() async {
+  final c = sb, u = c?.auth.currentUser;
+  if (c == null || u == null || app.authMode != 'google') return;
+  try {
+    await c.from('profiles').upsert({
+      'id': u.id, 'full_name': app.userName, 'email': u.email, 'avatar_url': app.avatarUrl,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  } catch (e) {
+    debugPrint('Profile sync failed: $e');
+  }
+}
+
+/// Saves the Google user's items, tags, splits & history to Supabase `user_data`.
+Future<void> syncCloudData(Map<String, dynamic> data) async {
+  final c = sb, u = c?.auth.currentUser;
+  if (c == null || u == null || app.authMode != 'google') return;
+  try {
+    await c.from('user_data').upsert({
+      'id': u.id,
+      'data': data,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  } catch (e) {
+    debugPrint('Cloud data sync failed: $e');
+  }
+}
+
+/// Loads the Google user's saved data from Supabase `user_data`.
+Future<Map<String, dynamic>?> fetchCloudData() async {
+  final c = sb, u = c?.auth.currentUser;
+  if (c == null || u == null) return null;
+  try {
+    final row = await c.from('user_data').select('data').eq('id', u.id).maybeSingle();
+    final d = row?['data'];
+    return d is Map<String, dynamic> ? d : null;
+  } catch (e) {
+    debugPrint('Cloud data fetch failed: $e');
+    return null;
+  }
+}
+
+Future<void> signInWithGoogle() async {
+  final c = sb;
+  if (c == null) {
+    toast('Google sign-in isn’t set up yet (see SUPABASE_SETUP.md)');
+    return;
+  }
+  try {
+    await c.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: kIsWeb ? null : authRedirect,
+      queryParams: const {'prompt': 'select_account'},
+    );
+  } catch (e) {
+    debugPrint('Google sign-in failed: $e');
+    toast('Google sign-in failed. Check your connection.');
+  }
+}
+
+Future<void> signOut({bool erase = false}) async {
+  try { await sb?.auth.signOut(); } catch (_) {}
+  navKey.currentState?.popUntil((r) => r.isFirst);
+  await app.clearProfile(erase: erase);
+}
+
+// ---- profile picture / initial ----
+Widget userAvatar(double z) {
+  final n = (app.userName ?? '').trim(), url = app.avatarUrl;
+  final ini = Text(n.isEmpty ? '?' : n[0].toUpperCase(), style: ts(z * 0.4, w: w7, c: kPr));
+  return Container(
+      width: z, height: z, alignment: Alignment.center, clipBehavior: Clip.antiAlias,
+      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+      child: url == null ? ini : Image.network(url, width: z, height: z, fit: BoxFit.cover, errorBuilder: (_, _, _) => ini));
+}
+
+// ============================================================
+// 13. LANDING PAGE (shown until the user picks a name or signs in)
+// ============================================================
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+      listenable: app,
+      // the key rebuilds every screen when the theme changes, so all colors update at once
+      builder: (_, _) => KeyedSubtree(key: ValueKey('${app.dark}-${app.signedIn}'), child: app.signedIn ? const Shell() : const LandingPage()));
+}
+
+class LandingPage extends StatefulWidget {
+  const LandingPage({super.key});
+  @override
+  State<LandingPage> createState() => _LandingState();
+}
+
+class _LandingState extends State<LandingPage> {
+  final nameC = TextEditingController();
+  bool busy = false;
+
+  Future<void> goOffline() async {
+    final n = nameC.text.trim();
+    if (n.isEmpty) { toast('Type your name first'); return; }
+    FocusScope.of(context).unfocus();
+    await app.setProfile(id: 'local_${n.toLowerCase()}', name: n, mode: 'local');
+  }
+
+  Future<void> goGoogle() async {
+    setState(() => busy = true);
+    await signInWithGoogle();
+    if (mounted) setState(() => busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    Widget pill(IconData i, String t) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(color: kW18, borderRadius: BorderRadius.circular(16)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(i, size: 14, color: Colors.white), const SizedBox(width: 6), Text(t, style: ts(11, w: w6, c: Colors.white))]));
+    return Scaffold(
+        backgroundColor: kPr,
+        body: SingleChildScrollView(
+            child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: mq.size.height),
+                child: IntrinsicHeight(
+                    child: Column(children: [
+                      Padding(
+                          padding: EdgeInsets.fromLTRB(24, mq.padding.top + 44, 24, 30),
+                          child: Column(children: [
+                            Container(
+                                width: 86, height: 86, alignment: Alignment.center,
+                                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28)),
+                                child: const Icon(Icons.account_balance_wallet_rounded, color: kPr, size: 46)),
+                            gap(18),
+                            Text('Sakto', style: ts(38, w: w7, c: Colors.white)),
+                            Text('Budget, list and split your gastos.', textAlign: TextAlign.center, style: ts(13, c: Colors.white70)),
+                            gap(22),
+                            Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
+                              pill(Icons.payments_rounded, 'Cash on hand'), pill(Icons.checklist_rounded, 'Tag lists'),
+                              pill(Icons.donut_large_rounded, 'Bill splitter'), pill(Icons.bar_chart_rounded, 'Analytics'),
+                            ]),
+                          ])),
+                      Expanded(
+                          child: Container(
+                              width: double.infinity,
+                              padding: EdgeInsets.fromLTRB(22, 26, 22, 26 + mq.padding.bottom),
+                              decoration: BoxDecoration(color: kBg, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text('Get started', style: ts(22, w: w7)), gap(2),
+                                Text('Sakto works offline. Your lists stay on this phone.', style: ts(12, c: kMut)),
+                                label('What should we call you?'),
+                                TextField(controller: nameC, maxLength: 24, textCapitalization: TextCapitalization.words, style: ts(15), decoration: deco('e.g. Juan'), onSubmitted: (_) => goOffline()),
+                                gap(6),
+                                bigBtn('Continue offline', goOffline),
+                                gap(18),
+                                Row(children: [
+                                  Expanded(child: Divider(color: kLn, thickness: 1.2)),
+                                  Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text('or', style: ts(12, c: kMut))),
+                                  Expanded(child: Divider(color: kLn, thickness: 1.2)),
+                                ]),
+                                gap(18),
+                                SizedBox(
+                                    width: double.infinity, height: 50,
+                                    child: OutlinedButton(
+                                        onPressed: busy ? null : goGoogle,
+                                        style: OutlinedButton.styleFrom(backgroundColor: kCard, side: BorderSide(color: kLn, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                                        child: busy
+                                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: kPr))
+                                            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                          Text('G', style: ts(20, w: FontWeight.w800, c: const Color(0xFF4285F4))),
+                                          const SizedBox(width: 10),
+                                          Text('Continue with Google', style: ts(15, w: w6)),
+                                        ]))),
+                                gap(12),
+                                Center(child: Text('Google sign-in saves your account online, so you can use the same profile on another phone.', textAlign: TextAlign.center, style: ts(10, c: kMut))),
+                              ]))),
+                    ])))));
+  }
+}
