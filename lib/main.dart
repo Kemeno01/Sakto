@@ -503,7 +503,7 @@ class SpentApp extends StatelessWidget {
   const SpentApp({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
-      title: 'Spent-To-Sawa', debugShowCheckedModeBanner: false, navigatorKey: navKey,
+      title: 'Sakto', debugShowCheckedModeBanner: false, navigatorKey: navKey,
       theme: ThemeData(
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: kPr),
@@ -662,7 +662,7 @@ class UserSheet extends StatelessWidget {
   const UserSheet({super.key});
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text('Spent-To-Sawa', style: ts(18, w: w7)), gap(4),
+    Text('Sakto', style: ts(18, w: w7)), gap(4),
     Text('Your data is saved on this device only.', style: ts(11, c: kMut)), gap(14),
     bigBtn('Reset all data', () async {
       final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(backgroundColor: Colors.white, title: const Text('Reset everything?'), content: const Text('This erases all items, tags, history and settings.'),
