@@ -6,12 +6,23 @@
 
 ## Features
 
+### Landing Page & Accounts
+- **Continue offline:** Just type your name. Everything stays on your phone.
+- **Continue with Google:** Signs in through Supabase Auth and saves your account online (name, email, photo). See **[SUPABASE_SETUP.md](SUPABASE_SETUP.md)** for the one-time setup.
+
+### Profile Drawer (tap the circle at the top-left of Home)
+- **Your name & photo:** Tap your name to edit it.
+- **Your tags:** Tap a tag to open it in Lists, or tap **Manage** to add, rename, or delete tags.
+- **People you split with:** Everyone you added on the Split tab. Tap a person to jump to their split.
+- **Settings:** Light / Dark theme, account info, and **Reset all data**.
+- **Sign out:** Keep your data on the phone, or sign out and erase it.
+
 ### 1. Home — Cash on Hand & Daily History
 - **Live Budget Overview:** Tracks your **Cash on Hand**, total spent (counting only *your* share on split tags), and remaining balance with a visual progress bar.
 - **Cash Tracking:** Update your cash on hand anytime; increases are automatically recorded as income for analytics.
 - **Save Day:** Snapshot your checked items into daily history so you can review past spending.
 - **Calendar & Reuse:** Open the calendar to inspect any saved day's breakdown, or tap **Reuse** to copy a past day's items back into your active list.
-- **Reset Data:** Wipe all local items, tags, history, and settings from the profile/user sheet if you want a fresh start.
+- **Reset Data:** Wipe all local items, tags, history, and splits from **Profile Drawer → Settings → Reset all data**.
 
 ### 2. Lists — Tag-Based Expense Checklist
 - **Color-Coded Tags:** Create, rename, and delete tags (e.g., *Groceries*, *Food*, *Bills*, *Trip*) and optionally assign a separate cash budget per tag.
@@ -99,7 +110,10 @@ The generated APK will be located at `build/app/outputs/flutter-apk/app-debug.ap
 ```text
 Sakto/
 ├── lib/
-│   └── main.dart          # Complete app: models, AppState, Home, Lists, Split, Analytics & UI sheets
+│   ├── main.dart          # Models, AppState, Home, Lists, Split, Analytics & UI sheets
+│   ├── auth.dart          # Landing page, offline login, Google sign-in (Supabase)
+│   ├── drawer.dart        # Profile drawer and Settings page (theme, data, sign out)
+│   └── supabase_config.dart # Your Supabase URL + anon key
 ├── android/               # Android platform configuration
 ├── ios/                   # iOS platform configuration
 ├── web/                   # Web platform configuration
