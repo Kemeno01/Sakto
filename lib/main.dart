@@ -15,9 +15,13 @@ part 'drawer.dart';
 // ============================================================
 // 1. CONSTANTS & HELPERS
 // ============================================================
-const kPr = Color(0xFF7B4DEB), kLil = Color(0xFF9B6BFF), kWr = Color(0xFFC2410C);
+const kWr = Color(0xFFC2410C);
 // theme-aware colors (Settings → Appearance switches between light and dark)
 bool get isDark => app.dark;
+Color get kPr => isDark ? const Color(0xFF4B2896) : const Color(0xFF7B4DEB); // primary purple
+Color get kPrText => isDark ? const Color(0xFFB794FF) : const Color(0xFF7B4DEB); // readable purple text
+Color get kGreen => isDark ? const Color(0xFF4ADE80) : const Color(0xFF14683A); // readable green text
+Color get kLil => isDark ? const Color(0xFF6B42C2) : const Color(0xFF9B6BFF); // FAB purple
 Color get kInk => isDark ? const Color(0xFFEDEAF6) : const Color(0xFF1B1630); // main text
 Color get kMut => isDark ? const Color(0xFFA8A2BD) : const Color(0xFF6B6580); // muted text
 Color get kBg => isDark ? const Color(0xFF110F18) : const Color(0xFFF6F5F9); // page background
@@ -119,8 +123,9 @@ class Rng { String preset, from, to; Rng(this.preset, this.from, this.to); }
 // 3. APP STATE (saved on the phone)
 // ============================================================
 class AppState extends ChangeNotifier {
-  final DateTime now = DateTime.now();
-  late final String today = dkey(now);
+  DateTime get now => DateTime.now();
+  String get today => dkey(now);
+  late String activeDay = today;
   double cash = 0; int nid = 1, tn = 0;
   List<Item> items = []; List<String> buckets = []; Map<String, int> tc = {};
   Map<String, double> bcash = {}; // cash on hand per tag
@@ -142,10 +147,15 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
   }
   void _prof(VoidCallback f) { f(); saveProfile(); notifyListeners(); }
-  void _clearMemory() {
-    cash = 0; nid = 1; tn = 0; items = []; buckets = []; tc = {}; bcash = {}; sp = {}; inc = []; hist = {};
-    tab = 0; sel = {}; splitTag = null; rng = presetRange('month');
+  void _clearActive() {
+    cash = 0; nid = 1; tn = 0; items = []; buckets = []; tc = {}; bcash = {}; sp = {};
+    sel = {}; splitTag = null;
   }
+  void _clearMemory() {
+    _clearActive();
+    inc = []; hist = {}; tab = 0; activeDay = today; rng = presetRange('month');
+  }
+  void clearActiveList() => mut(_clearActive);
   Future<void> setProfile({required String id, required String name, String? email, String? avatar, String mode = 'local'}) async {
     accountId = id; userName = name; userEmail = email; avatarUrl = avatar; authMode = mode;
     await saveProfile();
@@ -173,7 +183,7 @@ class AppState extends ChangeNotifier {
 
   // ---- save / load ----
   Map<String, dynamic> toJson() => {
-    'cash': cash, 'nid': nid, 'tn': tn, 'buckets': buckets, 'tc': tc, 'bcash': bcash,
+    'activeDay': activeDay, 'cash': cash, 'nid': nid, 'tn': tn, 'buckets': buckets, 'tc': tc, 'bcash': bcash,
     'items': items.map((e) => e.toJson()).toList(),
     'sp': sp.map((k, v) => MapEntry(k, v.toJson())),
     'inc': inc.map((e) => [e.d, e.a]).toList(),
@@ -196,6 +206,7 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
   }
   void _applyJson(Map<String, dynamic> j) {
+    activeDay = (j['activeDay'] as String?) ?? today;
     cash = (j['cash'] as num?)?.toDouble() ?? 0;
     nid = (j['nid'] as int?) ?? 1;
     tn = (j['tn'] as int?) ?? 0;
@@ -223,8 +234,22 @@ class AppState extends ChangeNotifier {
         try { await (await SharedPreferences.getInstance()).setString(k, jsonEncode(cloud)); } catch (_) {}
       }
     }
+    if (rolloverIfNeeded()) await save();
     notifyListeners();
   }
+  bool rolloverIfNeeded() {
+    final cur = today;
+    if (activeDay == cur) return false;
+    final rows = checked.map((i) => HRow(i.name + (i.qty > 1 ? ' ×${i.qty}' : ''), i.amt, i.bucket, myAmt(i), sp[i.bucket]?.mode != null)).toList();
+    if (rows.isNotEmpty) {
+      final h = hist[activeDay] ??= HistDay(cash, []);
+      h.lists = [rows]; h.cap = cash;
+    }
+    _clearActive();
+    activeDay = cur;
+    return true;
+  }
+  void checkRollover() { if (signedIn && rolloverIfNeeded()) { save(); notifyListeners(); } }
   Future<void> save() async {
     final k = _dataKey;
     if (k == null) return;
@@ -311,7 +336,7 @@ class AppState extends ChangeNotifier {
   bool saveDay() {
     final rows = checked.map((i) => HRow(i.name + (i.qty > 1 ? ' ×${i.qty}' : ''), i.amt, i.bucket, myAmt(i), sp[i.bucket]?.mode != null)).toList();
     if (rows.isEmpty) return false;
-    mut(() { final h = hist[today] ??= HistDay(cash, []); h.lists.add(rows); h.cap = cash; });
+    mut(() { final h = hist[today] ??= HistDay(cash, []); h.lists = [rows]; h.cap = cash; });
     return true;
   }
   void reuse(String k) => mut(() {
@@ -337,6 +362,35 @@ class AppState extends ChangeNotifier {
     if (pd != 1) return 0;
     final g = s.given[p] ?? 0;
     return g > 0 ? math.min(g, total) : total;
+  }
+  // total money received from the group in a split tag (includes cash before change is given back)
+  double tagReceivedRaw(String t) {
+    if (!isSplit(t)) return 0;
+    final s = spOf(t), per = calcSplit(t).per;
+    double sum = 0;
+    for (final e in per.entries) {
+      final owed = e.value.total, pd = s.paid[e.key] ?? 0;
+      if (pd == 2) { sum += owed; }
+      else if (pd == 1) {
+        final g = (s.given[e.key] ?? 0) > 0 ? s.given[e.key]! : owed;
+        sum += s.changed[e.key] == true ? math.min(g, owed) : g;
+      }
+    }
+    return sum;
+  }
+  // true when everyone in the split tag has paid and all change has been given back
+  bool isTagSettled(String t) {
+    if (!isSplit(t)) return false;
+    final s = spOf(t), per = calcSplit(t).per;
+    final payers = per.entries.where((e) => e.value.total > 0.005).toList();
+    if (payers.isEmpty) return false;
+    return payers.every((e) {
+      final owed = e.value.total, pd = s.paid[e.key] ?? 0;
+      if (pd == 2) return true;
+      if (pd != 1) return false;
+      final g = (s.given[e.key] ?? 0) > 0 ? s.given[e.key]! : owed;
+      return g >= owed - 0.005 && (g <= owed + 0.005 || s.changed[e.key] == true);
+    });
   }
   void setDisc(String t, double v) => mut(() => spOf(t).disc = v);
   void setFee(String t, double v) => mut(() => spOf(t).fee = v);
@@ -466,6 +520,13 @@ void toast(String m) {
 TextStyle ts(double s, {FontWeight w = FontWeight.w400, Color? c}) => TextStyle(fontSize: s, fontWeight: w, color: c ?? kInk);
 Widget gap(double h) => SizedBox(height: h);
 
+Widget slideReveal(bool open, Widget child) => TweenAnimationBuilder<double>(
+    tween: Tween(end: open ? 1.0 : 0.0),
+    duration: const Duration(milliseconds: 240),
+    curve: Curves.easeOutCubic,
+    builder: (_, t, c) => t == 0 ? const SizedBox(width: double.infinity) : ClipRect(child: Align(alignment: Alignment.topCenter, heightFactor: t, child: Opacity(opacity: t, child: c))),
+    child: child);
+
 Widget cardBox(Widget child, {EdgeInsets p = const EdgeInsets.all(14), EdgeInsets m = EdgeInsets.zero, Color? color, double r = 16, Border? border}) =>
     Container(margin: m, padding: p, decoration: BoxDecoration(color: color ?? kCard, borderRadius: BorderRadius.circular(r), border: border), child: child);
 
@@ -473,7 +534,7 @@ Widget progress(int pct, {Color track = kW35, Color fill = Colors.white}) => Cli
     borderRadius: BorderRadius.circular(3),
     child: SizedBox(height: 6, child: Stack(fit: StackFit.expand, children: [
       ColoredBox(color: track),
-      Align(alignment: Alignment.centerLeft, child: FractionallySizedBox(widthFactor: (pct / 100).clamp(0.0, 1.0), child: ColoredBox(color: fill))),
+      Align(alignment: Alignment.centerLeft, child: AnimatedFractionallySizedBox(duration: const Duration(milliseconds: 250), curve: Curves.easeOut, widthFactor: (pct / 100).clamp(0.0, 1.0), heightFactor: 1.0, child: ColoredBox(color: fill))),
     ])));
 
 Widget bigBtn(String t, VoidCallback f, {bool white = false, Color? bg}) => SizedBox(
@@ -589,8 +650,27 @@ void main() async {
 
 final shellKey = GlobalKey<ScaffoldState>();
 
-class SpentApp extends StatelessWidget {
+class SpentApp extends StatefulWidget {
   const SpentApp({super.key});
+  @override
+  State<SpentApp> createState() => _SpentAppState();
+}
+
+class _SpentAppState extends State<SpentApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) app.checkRollover();
+  }
   @override
   Widget build(BuildContext context) => ListenableBuilder(
       listenable: app,
@@ -677,7 +757,7 @@ class _HomeState extends State<HomePage> {
                                 if (warn) Positioned(top: 9, right: 10, child: Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFFFF2D2D), shape: BoxShape.circle))),
                               ]))),
                     ]),
-                    if (strip) ...[
+                    slideReveal(strip, Column(children: [
                       gap(16),
                       Row(children: [
                         for (final d in days)
@@ -695,9 +775,19 @@ class _HomeState extends State<HomePage> {
                         Row(children: [const Icon(Icons.circle, size: 5, color: Colors.white), const SizedBox(width: 4), Text('Has a saved list', style: ts(10, c: Colors.white))]),
                         TextButton(onPressed: () => showSheet(c, CalendarSheet(initial: app.today)), child: Text('See all ›', style: ts(10, c: Colors.white))),
                       ]),
-                    ],
+                      gap(6),
+                      Center(
+                          child: ElevatedButton.icon(
+                              onPressed: () => toast(app.saveDay() ? 'Saved to spending history' : 'Check some items first'),
+                              icon: const Icon(Icons.bookmark_add_rounded, size: 17),
+                              label: Text(app.hist.containsKey(app.today) ? "Update today's list" : "Save today's list", style: ts(13, w: w7, c: kPr)),
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white, foregroundColor: kPr, elevation: 0,
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))))),
+                    ])),
                     gap(10),
-                    Text('Active total · your own money', style: ts(13, c: Colors.white70)),
+                    Text('Active total', style: ts(13, c: Colors.white70)),
                     Text(fmt(app.total), style: ts(44, w: w7, c: Colors.white)),
                     gap(6),
                     progress(app.pct),
@@ -714,7 +804,7 @@ class _HomeState extends State<HomePage> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('Your Buckets', style: ts(16, w: w6)), gap(10),
                     if (app.buckets.isEmpty)
-                      cardBox(Text('No tags yet. Open Lists → Edit Tag to create your first tag.', style: ts(11, c: kMut)))
+                      cardBox(Text('Create your first tag!', style: ts(11, c: kMut)))
                     else
                       GridView.count(
                           crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisSpacing: 10, mainAxisSpacing: 10, childAspectRatio: 1.0,
@@ -724,19 +814,25 @@ class _HomeState extends State<HomePage> {
                                   child: cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                     TagChip(b), const Spacer(),
                                     Text(fmt(app.bt(b)), style: ts(19, w: w7)),
-                                    Text('${app.bc(b)} items${app.isSplit(b) ? ' · shared tag' : ''}', style: ts(10, c: kMut)),
-                                    gap(6),
-                                    InkWell(onTap: () => showSheet(c, CashSheet(tag: b)), child: Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                      Text((app.bcash[b] ?? 0) > 0 ? 'Cash ${fmt(app.bcash[b]!)} ›' : 'Set cash on hand ›', style: ts(10, w: w6, c: kPr)),
-                                      if ((app.bcash[b] ?? 0) > 0)
-                                        Text('Left ${fmt(app.bcash[b]! - app.bt(b))}', style: ts(10, w: w6, c: app.bcash[b]! - app.bt(b) >= 0 ? const Color(0xFF14683A) : kWr)),
-                                    ]))),
+                                    Text('${app.bc(b)} items${app.isSplit(b) ? ' · Shared Tag' : ''}', style: ts(10, c: kMut)),
+                                    if (app.isSplit(b)) ...[
+                                      gap(6),
+                                      InkWell(
+                                          onTap: () { app.openSplit(b); app.go(2); },
+                                          child: Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: 2),
+                                              child: app.isTagSettled(b)
+                                                  ? Text('Settled ✓', style: ts(11, w: w7, c: kGreen))
+                                                  : app.tagReceivedRaw(b) > 0
+                                                      ? Text('Received ${fmt(app.tagReceivedRaw(b))}', style: ts(11, w: w6, c: kPrText))
+                                                      : Text('No payments yet ›', style: ts(10, w: w6, c: kMut)))),
+                                    ],
                                   ]))),
                           ]),
                     gap(18), Text('Latest items', style: ts(16, w: w6)), gap(8),
                     cardBox(
                         latest.isEmpty
-                            ? Text('Nothing checked yet. Tap + to add your first item.', style: ts(11, c: kMut))
+                            ? Text('Tap + to add your first item.', style: ts(11, c: kMut))
                             : Column(children: [
                           for (final i in latest)
                             Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Row(children: [
@@ -852,9 +948,9 @@ class _CalState extends State<CalendarSheet> {
           ]),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Row(children: [
-              IconButton(onPressed: () => setState(() => cm = DateTime(y, mo - 1, 1)), icon: const Icon(Icons.chevron_left, color: kPr)),
+              IconButton(onPressed: () => setState(() => cm = DateTime(y, mo - 1, 1)), icon: Icon(Icons.chevron_left, color: kPr)),
               Text('${kMonths[mo - 1]} $y', style: ts(14, w: w7)),
-              IconButton(onPressed: () => setState(() => cm = DateTime(y, mo + 1, 1)), icon: const Icon(Icons.chevron_right, color: kPr)),
+              IconButton(onPressed: () => setState(() => cm = DateTime(y, mo + 1, 1)), icon: Icon(Icons.chevron_right, color: kPr)),
             ]),
             Text('$count saved lists', style: ts(11, c: kMut)),
           ]),
@@ -874,7 +970,7 @@ class _CalState extends State<CalendarSheet> {
               }),
           ]),
           gap(6),
-          Row(children: [const Icon(Icons.circle, size: 5, color: kPr), const SizedBox(width: 4), Text('Day with a saved list.', style: ts(11, c: kMut))]),
+          Row(children: [Icon(Icons.circle, size: 5, color: kPr), const SizedBox(width: 4), Text('Day with a saved list.', style: ts(11, c: kMut))]),
           gap(10),
           cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (H != null) ...[
@@ -890,10 +986,6 @@ class _CalState extends State<CalendarSheet> {
               }),
             ] else
               Text('No saved list on ${dayLabel(cd)}.', style: ts(11, c: kMut)),
-            if (cd == app.today) ...[
-              gap(8),
-              bigBtn("Save today's list${H != null ? ' as another list' : ''}", () { toast(app.saveDay() ? 'Saved to spending history' : 'Check some items first'); }, white: H != null),
-            ],
           ]), color: kBg, r: 18),
         ]);
       });
@@ -965,11 +1057,10 @@ class ListsPage extends StatelessWidget {
             for (final b in app.buckets) chip(b, S.contains(b), () => app.toggleSel(b)),
           ])),
           cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(S.isEmpty ? 'Your running total · all tags' : 'Your total · ${S.join(' + ')}', style: ts(11, c: kMut)),
+            Text(S.isEmpty ? 'Total · All Tags' : 'Total · ${S.join(' + ')}', style: ts(11, c: kMut)),
             Text.rich(TextSpan(children: [TextSpan(text: fmt(t), style: ts(30, w: w7)), TextSpan(text: ' / ${fmt(cap)}', style: ts(11, c: kMut))])),
             gap(6), progress(pct, track: const Color(0xFFE5DBFF), fill: kPr),
-            if (app.buckets.any(app.isSplit)) ...[gap(6), Text('Shared tags count only your share. The whole bill is in the Split tab.', style: ts(10, c: kMut))],
-            if (S.isEmpty) ...[gap(6), Text('Tip: tap two or more tags to see only their combined total.', style: ts(10, c: kMut))],
+
           ]), m: const EdgeInsets.fromLTRB(18, 12, 18, 12), r: 18, p: const EdgeInsets.all(16)),
           if (next != null)
             cardBox(Text('Heads up: adding ${next.name} puts you ${fmt(t + app.myAmt(next) - cap)} over budget.', style: ts(12, c: Colors.white)), color: kWr, r: 14, m: const EdgeInsets.fromLTRB(18, 0, 18, 12), p: const EdgeInsets.all(12)),
@@ -1105,7 +1196,7 @@ class _AddItemState extends State<AddItemSheet> {
           if (nameC.text.trim().isEmpty || p <= 0) { toast('Enter a name and price'); return; }
           if (bucket == null) { toast('Add a tag first (+ Add Tag)'); return; }
           app.addItem(nameC.text.trim(), p, qty, bucket!);
-          Navigator.pop(context); toast('Added. Tick it to count it');
+          Navigator.pop(context); toast('Item added! Check the box to include it');
         }),
       ]);
     });
@@ -1125,7 +1216,7 @@ class _TagsState extends State<TagsSheet> {
   Widget build(BuildContext context) => ListenableBuilder(listenable: app, builder: (c, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text('Edit Tag', style: ts(20, w: w7)),
     label(ren != null ? 'Rename tag' : '+ Add Tag'),
-    TextField(controller: tt, maxLength: 24, decoration: deco('e.g. Pasabuy ni Baby')),
+    TextField(controller: tt, maxLength: 24, decoration: deco('e.g. Mall Trip')),
     gap(8), label('Edit Tags'),
     ConstrainedBox(constraints: const BoxConstraints(minHeight: 90), child: app.buckets.isEmpty
         ? Text('No tags yet. Type a name above and tap Save Tag.', style: ts(11, c: kMut))
@@ -1173,18 +1264,17 @@ class SplitHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SafeArea(bottom: false, child: ListView(padding: const EdgeInsets.fromLTRB(18, 0, 18, 110), children: [
     Padding(padding: const EdgeInsets.only(top: 16, bottom: 6), child: Text('Split', style: ts(20, w: w6))),
-    Text('This tab shows the WHOLE bills, including the parts other people owe you. Home and Lists show only your own share.', style: ts(11, c: kMut)), gap(12),
-    if (app.buckets.isEmpty) cardBox(Text('No tags yet. Create tags in Lists → Edit Tag (like McDo or Dorm), then come back to split them.', style: ts(11, c: kMut))),
+    if (app.buckets.isEmpty) cardBox(Text('No tags created.', style: ts(11, c: kMut))),
     for (final b in app.buckets)
       Padding(padding: const EdgeInsets.only(bottom: 12), child: Builder(builder: (_) {
         final s = app.spOf(b), its = app.checked.where((i) => i.bucket == b).toList(), per = app.calcSplit(b).per;
-        final coll = per.entries.where((e) => e.key != 'Me').fold(0.0, (a, e) => a + (e.value.total - app.recvOf(b, e.key, e.value.total)));
+        final coll = per.entries.fold(0.0, (a, e) => a + (e.value.total - app.recvOf(b, e.key, e.value.total)));
         return InkWell(onTap: () => s.mode == null ? showSheet(context, SplitModeSheet(b)) : app.openSplit(b), borderRadius: BorderRadius.circular(16),
             child: cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [TagChip(b), Text(s.mode == 'item' ? 'Itemized' : s.mode == 'equal' ? 'Equal split' : 'Not set yet', style: ts(11, c: kMut))]),
               gap(10),
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(fmt(its.fold(0.0, (a, i) => a + i.amt)), style: ts(20, w: w7)), Text('${its.length} checked item${its.length == 1 ? '' : 's'}', style: ts(11, c: kMut)), Text('Your share ${fmt(app.bt(b))}', style: ts(11, w: w6, c: kPr))]),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(fmt(its.fold(0.0, (a, i) => a + i.amt)), style: ts(20, w: w7)), Text('Your Total ${fmt(app.bt(b))}', style: ts(11, w: w6, c: kPr))]),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   avStack(s.people, 26), gap(4),
                   Text('${s.people.length} ${s.people.length == 1 ? 'person' : 'people'}${coll > 0 ? ' · to collect ${fmt(coll)}' : ''}', style: ts(11, c: kMut)),
@@ -1201,21 +1291,21 @@ class SplitModeSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = app.spOf(tag);
-    Widget opt(String m, String t, String d) => Padding(padding: const EdgeInsets.only(top: 10), child: InkWell(
+    Widget opt(String m, String t) => Padding(padding: const EdgeInsets.only(top: 10), child: InkWell(
         onTap: () { app.startSplit(tag, m); Navigator.pop(context); }, borderRadius: BorderRadius.circular(14),
         child: Container(width: double.infinity, padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: s.mode == m ? kSel : kCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: s.mode == m ? kPr : kLn, width: s.mode == m ? 2 : 1)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t, style: ts(15, w: w7)), const SizedBox(height: 2), Text(d, style: ts(11, c: kMut))]))));
+            child: Text(t, style: ts(15, w: w7)))));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('How would you like to split this?', style: ts(20, w: w7)), const SizedBox(height: 2),
+          Text('Splitting Option', style: ts(20, w: w7)), const SizedBox(height: 2),
           Text('$tag · ${fmt(app.checked.where((i) => i.bucket == tag).fold(0.0, (a, i) => a + i.amt))}', style: ts(13, c: kMut)),
         ])),
         closeBtn(context),
       ]),
-      opt('equal', 'Split equally', 'Everything is divided evenly between the people in this tag.'),
-      opt('item', 'Itemized split', 'Choose who ordered each item. Only they pay for it.'),
+      opt('equal', 'Split equally'),
+      opt('item', 'Itemized split'),
     ]);
   }
 }
@@ -1232,19 +1322,19 @@ class _TripState extends State<TripSplitter> {
   Widget build(BuildContext context) {
     final t = widget.tag, s = app.spOf(t), r = app.calcSplit(t), per = r.per, base = r.base, eq = s.mode == 'equal';
     final items = app.checked.where((i) => i.bucket == t).toList();
-    final others = per.keys.where((p) => p != 'Me');
-    final collect = others.fold(0.0, (a, p) => a + (per[p]!.total - app.recvOf(t, p, per[p]!.total)));
-    final received = others.fold(0.0, (a, p) => a + app.recvOf(t, p, per[p]!.total));
-    final toReturn = others.fold(0.0, (a, p) {
+    final payers = per.keys;
+    final collect = payers.fold(0.0, (a, p) => a + (per[p]!.total - app.recvOf(t, p, per[p]!.total)));
+    final received = payers.fold(0.0, (a, p) => a + app.recvOf(t, p, per[p]!.total));
+    final toReturn = payers.fold(0.0, (a, p) {
       final g = s.given[p] ?? 0, tot = per[p]!.total;
       return a + (((s.paid[p] ?? 0) == 1 && g > tot + 0.005 && s.changed[p] != true) ? g - tot : 0.0);
     });
     return SafeArea(bottom: false, child: ListView(padding: const EdgeInsets.only(bottom: 110), children: [
       titleRow('Trip Splitter', app.backToTags, trailing: softBtn('${eq ? 'Equal' : 'Itemized'} ▾', () => showSheet(context, SplitModeSheet(t)))),
       cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Whole bill · ${items.length} checked items', style: ts(11, c: kMut)), TagChip(t)]),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Whole bill', style: ts(11, c: kMut)), TagChip(t)]),
         Text(fmt(items.fold(0.0, (a, i) => a + i.amt)), style: ts(32, w: w7)),
-        Text('Your own share: ${fmt(app.bt(t))}', style: ts(12, w: w6, c: kPr)),
+        Text('Your Total: ${fmt(app.bt(t))}', style: ts(12, w: w6, c: kPr)),
       ]), m: const EdgeInsets.fromLTRB(18, 0, 18, 12), r: 18, p: const EdgeInsets.all(16)),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1264,8 +1354,7 @@ class _TripState extends State<TripSplitter> {
         gap(12),
         cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Orders', style: ts(15, w: w6)), gap(4),
-          Text(eq ? 'Equal split: every item is shared by everyone.' : 'Tap an item to choose who it’s for. A colored bar means only that person pays.', style: ts(11, c: kMut)),
-          if (items.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text('No checked items in this tag yet. Check items on the Lists tab.', style: ts(11, c: kMut))),
+          if (items.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text('No checked items.', style: ts(11, c: kMut))),
           for (final i in items) orderRow(context, i),
         ])),
         gap(12),
@@ -1274,9 +1363,9 @@ class _TripState extends State<TripSplitter> {
           Row(children: [
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Overall discount (₱)', style: ts(11, c: kMut)), gap(4), NumField(key: ValueKey('$t-d'), value: s.disc, onChanged: (v) => app.setDisc(t, v))])),
             const SizedBox(width: 10),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Tax / delivery / service (₱)', style: ts(11, c: kMut)), gap(4), NumField(key: ValueKey('$t-f'), value: s.fee, onChanged: (v) => app.setFee(t, v))])),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Tax / service (₱)', style: ts(11, c: kMut)), gap(4), NumField(key: ValueKey('$t-f'), value: s.fee, onChanged: (v) => app.setFee(t, v))])),
           ]),
-          gap(8), Text('Shared in proportion to what each person ordered.', style: ts(11, c: kMut)),
+          gap(8),
         ])),
         gap(12),
         Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: kDeep, borderRadius: BorderRadius.circular(16)),
@@ -1338,16 +1427,15 @@ class _TripState extends State<TripSplitter> {
         Text(fmt(o.total), style: ts(17, w: w7)),
       ]),
       InkWell(onTap: () => setState(() { if (isOpen) { open.remove(p); } else { open.add(p); } }), child: Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(isOpen ? 'Hide items ▲' : 'View items ▼', style: ts(12, w: w6, c: kPr)))),
-      if (isOpen) ...[
+      slideReveal(isOpen, Column(children: [
         for (final l in o.lines) Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(l.name, style: ts(12)), Text(fmt(l.amt), style: ts(12))])),
         const Divider(height: 14),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Discount share', style: ts(12)), Text(fmt(base > 0 ? -s.disc * o.sub / base : 0), style: ts(12))]),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Fee share', style: ts(12)), Text(fmt(base > 0 ? s.fee * o.sub / base : 0), style: ts(12))]),
         gap(6),
-      ],
-      if (p == 'Me') Text('Your own share, no payment needed.', style: ts(11, c: kMut))
-      else Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(10)), child: Row(children: [seg('Unpaid', 0), seg('Cash', 1), seg('GCash received', 2)])),
-      if (p != 'Me' && paid == 1 && given > 0) ...[
+      ])),
+      Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(10)), child: Row(children: [seg('Unpaid', 0), seg('Cash', 1), seg('GCash received', 2)])),
+      slideReveal(paid == 1 && given > 0, Column(children: [
         gap(8),
         cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -1362,7 +1450,7 @@ class _TripState extends State<TripSplitter> {
               Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(10)), child: Row(children: [chgSeg('Change not given', false), chgSeg('Change given ✓', true)])),
             ],
         ]), color: kBg, r: 12, p: const EdgeInsets.all(12)),
-      ],
+      ])),
     ])));
   }
 }
@@ -1430,19 +1518,19 @@ class _OwnerState extends State<OwnerSheet> {
   @override
   Widget build(BuildContext context) {
     final it = widget.item, pp = app.spOf(it.bucket).people, P = mode == 'all' ? pp : who;
-    Widget opt(String m, String t, String d) => Padding(padding: const EdgeInsets.only(top: 8), child: InkWell(
+    Widget opt(String m, String t) => Padding(padding: const EdgeInsets.only(top: 8), child: InkWell(
         onTap: () => setState(() { mode = m; if (m == 'one') who = who.take(1).toList(); }), borderRadius: BorderRadius.circular(14),
-        child: Container(width: double.infinity, padding: const EdgeInsets.all(12),
+        child: Container(width: double.infinity, padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: mode == m ? kSel : kCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: mode == m ? kPr : kLn, width: mode == m ? 2 : 1)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t, style: ts(14, w: w7)), Text(d, style: ts(11, c: kMut))]))));
+            child: Text(t, style: ts(14, w: w7)))));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Who ordered this?', style: ts(20, w: w7)), Text('${it.name} · ${fmt(it.amt)}', style: ts(13, c: kMut))])),
         closeBtn(context),
       ]),
-      opt('one', 'Only one person', 'The whole price goes to them. Nobody else is charged.'),
-      opt('some', 'Shared by some people', 'Pick who shares it. The price is divided between them.'),
-      opt('all', 'Everyone', 'Split equally between all ${pp.length} people.'),
+      opt('one', 'Only one person'),
+      opt('some', 'Shared by some people'),
+      opt('all', 'Everyone'),
       label('Charge to'),
       Wrap(spacing: 8, runSpacing: 8, children: [
         for (final p in pp)
@@ -1518,7 +1606,7 @@ class StatsPage extends StatelessWidget {
           titleRow('Analytics & Report', () => app.go(0)),
           InkWell(onTap: () => showSheet(c, const RangeSheet()), borderRadius: BorderRadius.circular(16),
               child: cardBox(Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                const Icon(Icons.calendar_month, color: kPr, size: 20), Text(rangeLabel(a, b), style: ts(14, w: w7)), const Text('▾'),
+                Icon(Icons.calendar_month, color: kPr, size: 20), Text(rangeLabel(a, b), style: ts(14, w: w7)), const Text('▾'),
               ]), border: Border.all(color: kPr, width: 1.5), p: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
           gap(10),
           SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
@@ -1536,11 +1624,10 @@ class StatsPage extends StatelessWidget {
           cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Total ${ex ? 'expenses' : 'income'} · $n day${n > 1 ? 's' : ''}', style: ts(11, c: kMut)),
             Text(fmt(T), style: ts(30, w: FontWeight.w800)),
-            Text('Only your own share of split bills counts here.', style: ts(11, c: kMut)), gap(6),
             Wrap(spacing: 10, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
               if (app.cmp)
                 (ch == null
-                    ? Text('No data in the previous period', style: ts(11, c: kMut))
+                    ? Text(' ', style: ts(11, c: kMut))
                     : Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: bad ? const Color(0xFFFEF3C7) : const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(6)),
                     child: Text('${ch > 0 ? '▲' : ch < 0 ? '▼' : '•'} ${ch.abs()}% vs previous $n day${n > 1 ? 's' : ''}', style: ts(12, w: w7, c: bad ? const Color(0xFFB45309) : const Color(0xFF166534))))),
               Text('Avg ${fmt(T / n)} / day', style: ts(11, c: kMut)),

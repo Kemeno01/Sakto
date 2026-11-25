@@ -2,7 +2,7 @@
     <!-- Needed for Google sign-in, Supabase and Google Fonts in release builds -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="spent_to_sawa"
+        android:label="Sakto"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
