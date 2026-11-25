@@ -153,67 +153,69 @@ class _LandingState extends State<LandingPage> {
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    Widget pill(IconData i, String t) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(color: kW18, borderRadius: BorderRadius.circular(16)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(i, size: 14, color: Colors.white), const SizedBox(width: 6), Text(t, style: ts(11, w: w6, c: Colors.white))]));
     return Scaffold(
         backgroundColor: kPr,
-        body: SingleChildScrollView(
-            child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: mq.size.height),
-                child: IntrinsicHeight(
-                    child: Column(children: [
-                      Padding(
-                          padding: EdgeInsets.fromLTRB(24, mq.padding.top + 44, 24, 30),
+        body: SafeArea(
+            child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 24),
+                child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: mq.size.height - mq.padding.vertical - 48),
+                    child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Center(
                           child: Column(children: [
-                            Container(
-                                width: 86, height: 86, alignment: Alignment.center,
-                                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28)),
-                                child: const Icon(Icons.account_balance_wallet_rounded, color: kPr, size: 46)),
-                            gap(18),
+                            Image.asset('assets/icon/sakto_logo_transparent.png', width: 155, height: 155, fit: BoxFit.contain),
+                            gap(16),
                             Text('Sakto', style: ts(38, w: w7, c: Colors.white)),
-                            Text('Budget, list and split your gastos.', textAlign: TextAlign.center, style: ts(13, c: Colors.white70)),
-                            gap(22),
-                            Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
-                              pill(Icons.payments_rounded, 'Cash on hand'), pill(Icons.checklist_rounded, 'Tag lists'),
-                              pill(Icons.donut_large_rounded, 'Bill splitter'), pill(Icons.bar_chart_rounded, 'Analytics'),
-                            ]),
                           ])),
-                      Expanded(
-                          child: Container(
-                              width: double.infinity,
-                              padding: EdgeInsets.fromLTRB(22, 26, 22, 26 + mq.padding.bottom),
-                              decoration: BoxDecoration(color: kBg, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
-                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text('Get started', style: ts(22, w: w7)), gap(2),
-                                Text('Sakto works offline. Your lists stay on this phone.', style: ts(12, c: kMut)),
-                                label('What should we call you?'),
-                                TextField(controller: nameC, maxLength: 24, textCapitalization: TextCapitalization.words, style: ts(15), decoration: deco('e.g. Juan'), onSubmitted: (_) => goOffline()),
-                                gap(6),
-                                bigBtn('Continue offline', goOffline),
-                                gap(18),
-                                Row(children: [
-                                  Expanded(child: Divider(color: kLn, thickness: 1.2)),
-                                  Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text('or', style: ts(12, c: kMut))),
-                                  Expanded(child: Divider(color: kLn, thickness: 1.2)),
-                                ]),
-                                gap(18),
-                                SizedBox(
-                                    width: double.infinity, height: 50,
-                                    child: OutlinedButton(
-                                        onPressed: busy ? null : goGoogle,
-                                        style: OutlinedButton.styleFrom(backgroundColor: kCard, side: BorderSide(color: kLn, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-                                        child: busy
-                                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: kPr))
-                                            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                          Text('G', style: ts(20, w: FontWeight.w800, c: const Color(0xFF4285F4))),
-                                          const SizedBox(width: 10),
-                                          Text('Continue with Google', style: ts(15, w: w6)),
-                                        ]))),
-                                gap(12),
-                                Center(child: Text('Google sign-in saves your account online, so you can use the same profile on another phone.', textAlign: TextAlign.center, style: ts(10, c: kMut))),
+                      gap(40),
+                      Text('What should we call you?', style: ts(13, w: w6, c: Colors.white)),
+                      gap(8),
+                      TextField(
+                          controller: nameC, maxLength: 24, textCapitalization: TextCapitalization.words,
+                          cursorColor: Colors.white, style: ts(15, w: w6, c: Colors.white),
+                          decoration: InputDecoration(
+                              hintText: 'e.g. Juan', hintStyle: ts(15, c: Colors.white60),
+                              filled: true, fillColor: kW18, counterText: '',
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Colors.white70, width: 1.5))),
+                          onSubmitted: (_) => goOffline()),
+                      gap(14),
+                      SizedBox(
+                          width: double.infinity, height: 50,
+                          child: ElevatedButton(
+                              onPressed: goOffline,
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white, foregroundColor: kPr, elevation: 0,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                              child: Text('Continue offline', style: ts(15, w: w7, c: kPr)))),
+                      gap(20),
+                      Row(children: [
+                        const Expanded(child: Divider(color: Colors.white24, thickness: 1)),
+                        Padding(padding: const EdgeInsets.symmetric(horizontal: 14), child: Text('or', style: ts(12, c: Colors.white70))),
+                        const Expanded(child: Divider(color: Colors.white24, thickness: 1)),
+                      ]),
+                      gap(20),
+                      SizedBox(
+                          width: double.infinity, height: 50,
+                          child: OutlinedButton(
+                              onPressed: busy ? null : goGoogle,
+                              style: OutlinedButton.styleFrom(
+                                  backgroundColor: kW18,
+                                  side: const BorderSide(color: Colors.white38, width: 1.2),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                              child: busy
+                                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
+                                  : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                                Container(
+                                    width: 24, height: 24, alignment: Alignment.center,
+                                    decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                                    child: Text('G', style: ts(14, w: FontWeight.w800, c: const Color(0xFF4285F4)))),
+                                const SizedBox(width: 10),
+                                Text('Continue with Google', style: ts(15, w: w6, c: Colors.white)),
                               ]))),
+                      gap(14),
+                      Center(child: Text('Google sign-in syncs your account online across devices.', textAlign: TextAlign.center, style: ts(11, c: Colors.white70))),
                     ])))));
   }
 }

@@ -92,23 +92,33 @@ class ProfileDrawer extends StatelessWidget {
                       section('Settings'),
                       ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 18),
-                          leading: Container(width: 36, height: 36, decoration: BoxDecoration(color: kSel, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.settings_rounded, color: kPr, size: 20)),
+                          leading: Container(width: 36, height: 36, decoration: BoxDecoration(color: kSel, borderRadius: BorderRadius.circular(10)), child: Icon(Icons.settings_rounded, color: kPr, size: 20)),
                           title: Text('Settings', style: ts(14, w: w6)),
                           subtitle: Text('Theme: ${isDark ? 'Dark' : 'Light'} · data · account', style: ts(11, c: kMut)),
                           trailing: Icon(Icons.chevron_right_rounded, color: kMut),
                           onTap: () { Navigator.pop(c); navKey.currentState?.push(MaterialPageRoute(builder: (_) => const SettingsPage())); }),
                       gap(10),
                     ])),
-                // ---- sign out ----
+                // ---- erase current list & sign out ----
                 Padding(
                     padding: EdgeInsets.fromLTRB(18, 8, 18, 16 + mq.padding.bottom),
-                    child: SizedBox(
-                        width: double.infinity, height: 48,
-                        child: OutlinedButton.icon(
-                            onPressed: () => signOutDialog(c),
-                            icon: const Icon(Icons.logout_rounded, color: kRed, size: 20),
-                            label: Text('Sign out', style: ts(14, w: w6, c: kRed)),
-                            style: OutlinedButton.styleFrom(side: const BorderSide(color: kRed), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)))))),
+                    child: Column(children: [
+                      SizedBox(
+                          width: double.infinity, height: 46,
+                          child: OutlinedButton.icon(
+                              onPressed: () => clearListDialog(c),
+                              icon: const Icon(Icons.delete_sweep_rounded, color: kWr, size: 20),
+                              label: Text('Erase current list', style: ts(14, w: w6, c: kWr)),
+                              style: OutlinedButton.styleFrom(side: const BorderSide(color: kWr), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))))),
+                      gap(10),
+                      SizedBox(
+                          width: double.infinity, height: 48,
+                          child: OutlinedButton.icon(
+                              onPressed: () => signOutDialog(c),
+                              icon: const Icon(Icons.logout_rounded, color: kRed, size: 20),
+                              label: Text('Sign out', style: ts(14, w: w6, c: kRed)),
+                              style: OutlinedButton.styleFrom(side: const BorderSide(color: kRed), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))))),
+                    ])),
               ]);
             }));
   }
@@ -134,6 +144,16 @@ void editNameDialog(BuildContext c) {
             FilledButton(style: FilledButton.styleFrom(backgroundColor: kPr), onPressed: () => save(d), child: const Text('Save')),
           ]));
 }
+
+void clearListDialog(BuildContext c) => showDialog(
+    context: c,
+    builder: (d) => AlertDialog(
+        title: const Text('Erase current list?'),
+        content: const Text('This clears your active items, tags, and split people. Anything saved in your calendar days stays safe so you can review or reuse it anytime.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: Text('Cancel', style: ts(14, c: kMut))),
+          TextButton(onPressed: () { app.clearActiveList(); Navigator.pop(d); Navigator.pop(c); toast('Current list erased'); }, child: Text('Erase', style: ts(14, c: kWr))),
+        ]));
 
 void signOutDialog(BuildContext c) => showDialog(
     context: c,
@@ -234,7 +254,7 @@ class SettingsPage extends StatelessWidget {
                         ])),
                         head('About'),
                         cardBox(Row(children: [
-                          const Icon(Icons.account_balance_wallet_rounded, color: kPr), const SizedBox(width: 12),
+                          Icon(Icons.account_balance_wallet_rounded, color: kPr), const SizedBox(width: 12),
                           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Sakto · Spent-To-Sawa', style: ts(14, w: w7)), Text('Version 1.0.0', style: ts(11, c: kMut))])),
                         ])),
                         gap(18),
