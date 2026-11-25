@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Needed for Google sign-in, Supabase and Google Fonts in release builds -->
+    <!-- Needed for Google sign-in, Supabase, Gemini AI, and Google Fonts -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Needed for receipt camera scanning -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="Sakto"
         android:name="${applicationName}"

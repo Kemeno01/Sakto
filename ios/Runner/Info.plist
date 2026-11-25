@@ -15,6 +15,10 @@
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Sakto uses the camera to scan receipts and extract items.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sakto accesses your photo library so you can scan saved receipt photos.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
