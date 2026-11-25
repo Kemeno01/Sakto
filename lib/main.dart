@@ -851,6 +851,19 @@ void budgetAlert() {
   toast(app.cash == 0 ? 'Set your cash on hand first' : (l >= 0 ? '${fmt(l)} left of your ${fmt(app.cash)} cap' : 'Over your cap by ${fmt(-l)}'));
 }
 
+class UserSheet extends StatelessWidget {
+  const UserSheet({super.key});
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text('Sakto', style: ts(18, w: w7)), gap(4),
+    Text('Your data is saved on this device only.', style: ts(11, c: kMut)), gap(14),
+    bigBtn('Reset all data', () async {
+      final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(backgroundColor: Colors.white, title: const Text('Reset everything?'), content: const Text('This erases all items, tags, history and settings.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Erase'))]));
+      if (ok == true) { app.resetAll(); if (context.mounted) Navigator.pop(context); }
+    }, bg: const Color(0xFFD50000)),
+  ]);
+}
 // ============================================================
 // 7. CASH ON HAND SHEET (overall, or one tag)
 // ============================================================
