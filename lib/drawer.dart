@@ -1,8 +1,5 @@
 part of 'main.dart';
 
-// ============================================================
-// 14. PROFILE DRAWER (opens from the circle on Home)
-// ============================================================
 const kRed = Color(0xFFD50000);
 
 class ProfileDrawer extends StatelessWidget {
@@ -29,7 +26,7 @@ class ProfileDrawer extends StatelessWidget {
                       decoration: BoxDecoration(color: kW18, borderRadius: BorderRadius.circular(12)),
                       child: Column(children: [Text(v, style: ts(16, w: w7, c: Colors.white)), Text(t, style: ts(10, c: Colors.white70))])));
               return Column(children: [
-                // ---- header: picture, name (tap to edit), account type, quick stats ----
+
                 Container(
                     width: double.infinity, color: kPr,
                     padding: EdgeInsets.fromLTRB(18, mq.padding.top + 18, 10, 16),
@@ -58,7 +55,7 @@ class ProfileDrawer extends StatelessWidget {
                     ])),
                 Expanded(
                     child: ListView(padding: EdgeInsets.zero, children: [
-                      // ---- tags ----
+
                       section('Your tags', trailing: TextButton(onPressed: () { Navigator.pop(c); showSheet(shellCtx ?? c, const TagsSheet()); }, child: Text('Manage', style: ts(12, w: w6, c: kPr)))),
                       Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -71,7 +68,7 @@ class ProfileDrawer extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(8),
                                   child: Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: TagChip(b))),
                           ])),
-                      // ---- people from the Split tab ----
+
                       section('People you split with'),
                       if (people.isEmpty)
                         Padding(padding: const EdgeInsets.symmetric(horizontal: 18), child: Text('No people yet. Add friends inside a tag on the Split tab.', style: ts(11, c: kMut)))
@@ -88,7 +85,7 @@ class ProfileDrawer extends StatelessWidget {
                                 Navigator.pop(c);
                                 if (t.isNotEmpty) app.ui(() { app.tab = 2; app.splitTag = t.first; });
                               }),
-                      // ---- settings ----
+
                       section('Settings'),
                       ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 18),
@@ -99,7 +96,7 @@ class ProfileDrawer extends StatelessWidget {
                           onTap: () { Navigator.pop(c); navKey.currentState?.push(MaterialPageRoute(builder: (_) => const SettingsPage())); }),
                       gap(10),
                     ])),
-                // ---- erase current list & sign out ----
+
                 Padding(
                     padding: EdgeInsets.fromLTRB(18, 8, 18, 16 + mq.padding.bottom),
                     child: Column(children: [
@@ -168,9 +165,6 @@ void signOutDialog(BuildContext c) => showDialog(
           FilledButton(style: FilledButton.styleFrom(backgroundColor: kPr), onPressed: () { Navigator.pop(d); signOut(); }, child: const Text('Sign out')),
         ]));
 
-// ============================================================
-// 15. SETTINGS (theme, account, data)
-// ============================================================
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
   @override
@@ -188,7 +182,7 @@ class SettingsPage extends StatelessWidget {
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: on ? kSel : kCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: on ? kPr : kLn, width: on ? 2 : 1)),
                       child: Column(children: [
-                        // tiny preview of the theme
+
                         Container(
                             height: 70, padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10), border: Border.all(color: ln)),
