@@ -1,8 +1,5 @@
 part of 'main.dart';
 
-// ============================================================
-// 16. ADD CHOICE SHEET & RECEIPT SCANNER (Camera + Gemini AI)
-// ============================================================
 class AddChoiceSheet extends StatelessWidget {
   const AddChoiceSheet({super.key});
   @override
@@ -76,7 +73,7 @@ class _ScanReceiptState extends State<ScanReceiptPage> {
   @override
   void initState() {
     super.initState();
-    // Open the camera automatically as soon as Scan Receipt is opened
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _capture(ImageSource.camera));
   }
 
@@ -88,7 +85,7 @@ class _ScanReceiptState extends State<ScanReceiptPage> {
         imageQuality: 80,
         maxWidth: 1200,
       );
-      if (file == null) return; // user cancelled camera/gallery
+      if (file == null) return;
       final bytes = await file.readAsBytes();
       final mime = file.mimeType ?? 'image/jpeg';
       if (!mounted) return;
@@ -275,7 +272,7 @@ Rules:
                   Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        // ---- photo preview + camera/gallery actions ----
+
                         cardBox(Column(children: [
                           if (_photoBytes != null) ...[
                             ClipRRect(
@@ -322,7 +319,7 @@ Rules:
                             ],
                           ])),
                         if (!_scanning && _drafts.isNotEmpty) ...[
-                          // ---- scanned items ----
+
                           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                             Text('Scanned items (${kept.length})', style: ts(15, w: w7)),
                             Text(fmt(sum), style: ts(15, w: w7, c: kPrText)),
@@ -375,7 +372,7 @@ Rules:
                             ])),
                           ],
                           gap(16),
-                          // ---- pick or create tag ----
+
                           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                             Text('Choose a tag', style: ts(15, w: w7)),
                             TextButton(

@@ -1,137 +1,46 @@
-# Sakto (Spent-To-Sawa)
+# Sakto
 
-**Sakto** is an offline-first personal budgeting, expense checklist, and group bill-splitting mobile app built with Flutter (using Philippine Peso `₱`). It helps you track your cash on hand, organize purchases by tags, split shared bills with friends, and review your spending trends—all saved locally on your device.
-
----
-
-## Features
-
-### Landing Page & Accounts
-- **Continue offline:** Just type your name. Everything stays on your phone.
-- **Continue with Google:** Signs in through Supabase Auth and saves your account online (name, email, photo). See **[SUPABASE_SETUP.md](SUPABASE_SETUP.md)** for the one-time setup.
-
-### Profile Drawer (tap the circle at the top-left of Home)
-- **Your name & photo:** Tap your name to edit it.
-- **Your tags:** Tap a tag to open it in Lists, or tap **Manage** to add, rename, or delete tags.
-- **People you split with:** Everyone you added on the Split tab. Tap a person to jump to their split.
-- **Settings:** Light / Dark theme, account info, and **Reset all data**.
-- **Sign out:** Keep your data on the phone, or sign out and erase it.
-
-### 1. Home — Cash on Hand & Daily History
-- **Live Budget Overview:** Tracks your **Cash on Hand**, total spent (counting only *your* share on split tags), and remaining balance with a visual progress bar.
-- **Cash Tracking:** Update your cash on hand anytime; increases are automatically recorded as income for analytics.
-- **Save Day:** Snapshot your checked items into daily history so you can review past spending.
-- **Calendar & Reuse:** Open the calendar to inspect any saved day's breakdown, or tap **Reuse** to copy a past day's items back into your active list.
-- **Reset Data:** Wipe all local items, tags, history, and splits from **Profile Drawer → Settings → Reset all data**.
-
-### 2. Lists — Tag-Based Expense Checklist
-- **Color-Coded Tags:** Create, rename, and delete tags (e.g., *Groceries*, *Food*, *Bills*, *Trip*) and optionally assign a separate cash budget per tag.
-- **Interactive Item Checklist:** Add items with name, price, and quantity, then check/uncheck items to include or exclude them from your live total.
-- **Item Actions:** Edit item details, duplicate items, move items between tags, or delete them.
-- **Tag Filtering:** Tap one or more tags to view their combined total and per-tag budget cap.
-
-### 3. Split — Group Bill Splitter
-- **Per-Tag Groups:** Turn any tag into a shared bill by adding people (`Me` + friends).
-- **Two Split Modes:**
-  - **Equal Split:** Divides checked items evenly across everyone in the group.
-  - **Custom / Per-Item Split:** Assign specific owners to individual items.
-- **Discounts & Fees:** Add discounts or extra fees (e.g., delivery or service charges), automatically distributed proportionally across each person's subtotal.
-- **Payment & Change Tracking:** Track who has paid, record the exact cash handed to you, and mark whether change has been returned.
-- **Accurate Personal Totals:** Only *your* share from a split tag counts toward your overall spending on the Home screen.
-
-### 4. Analytics — Spending & Trend Insights
-- **Visual Charts:** View bar charts and donut category breakdowns of your spending.
-- **Flexible Date Ranges:** Filter by **Today**, **7 Days**, **30 Days**, **This Month**, **Last Month**, **3 Months**, **This Year**, or a **Custom Date Range**.
-- **Period Comparison:** Toggle **Compare with previous period** to see how your spending changes over time.
+A simple budgeting, expense list, and bill-splitting app for Android built with Flutter (Philippine Peso `₱`).
 
 ---
 
-## How to Use the App (Quick Walkthrough)
+## Download (Android)
 
-1. **Set Your Cash on Hand:** On the **Home** tab, tap your cash balance to enter how much money you have on hand.
-2. **Create Tags:** Go to **Lists** (or open the tags manager) and add categories like *Food*, *Transport*, or *Group Dinner*.
-3. **Add & Check Items:** Tap the center **`+`** button to add items with price and quantity. Check items off as you spend to update your live total.
-4. **Split Shared Expenses (Optional):** Open the **Split** tab, choose a tag, pick **Equal** or **Custom** mode, add the people involved, and track payments/change.
-5. **Save Your Day:** Once done for the day, save your checked items from the **Home** tab so they appear in **Calendar History** and **Analytics**.
-6. **Review Trends:** Open the **Analytics** tab to inspect where your money goes across any date range.
+[**Download Sakto.apk**](releases/Sakto.apk)
 
----
-
-## Tech Stack
-
-- **Framework:** [Flutter](https://flutter.dev/) (Dart SDK `^3.13.4`)
-- **State Management:** `ChangeNotifier` (`AppState` in `lib/main.dart`)
-- **Local Storage:** [`shared_preferences`](https://pub.dev/packages/shared_preferences) (offline-first JSON persistence)
-- **Typography & Icons:** [`google_fonts`](https://pub.dev/packages/google_fonts), [`cupertino_icons`](https://pub.dev/packages/cupertino_icons)
+**How to install on your phone:**
+1. Tap the link above and click **Download** (or **View raw**).
+2. Open the downloaded `Sakto.apk` file on your Android phone.
+3. If prompted, allow **Install from unknown sources**, then tap **Install**.
 
 ---
 
-## Getting Started (For Developers)
+## What It Does
 
-### Prerequisites
-- [Flutter SDK](https://docs.flutter.dev/get-started/install) installed and added to your `PATH`
-  > **Windows Tip:** Install the Flutter SDK in a folder **without spaces** (for example, `C:\flutter`) to avoid build hook errors on Windows.
-- Android Studio / VS Code with Flutter & Dart plugins
-- A connected physical device (with USB Debugging enabled) or an Android/iOS emulator
+- **Home:** Set your cash on hand, track how much you've spent, and view past saved days on the calendar.
+- **Lists:** Group items into tags (like *Food*, *Groceries*, *Tambayan*) and check them off as you spend.
+- **Split:** Split any tag equally or per item with friends, add discounts/service fees, and track Cash/GCash payments and change.
+- **Scan Receipt (`+` button):** Snap a photo of a receipt to automatically list the items, discounts, and fees.
+- **Analytics:** View simple bar and donut charts of your spending by day, week, or month.
+- **Offline or Google Sign-In:** Use it offline with just your name, or sign in with Google to sync your account.
 
-### Installation & Running Locally
+---
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Kemeno01/Sakto.git
-   cd Sakto
-   ```
+## Quick Start
 
-2. **Install dependencies:**
-   ```bash
-   flutter pub get
-   ```
+1. Open the app and enter your name (or sign in with Google).
+2. Tap **Cash on hand** on Home to set your budget.
+3. Tap **`+`** to add items manually or scan a receipt, then pick a tag.
+4. Open **Split** if you're sharing a bill with friends.
+5. Tap the date at the top of Home anytime to save your list for the day.
 
-3. **Check connected devices:**
-   ```bash
-   flutter devices
-   ```
+---
 
-4. **Run the app:**
-   ```bash
-   flutter run
-   ```
+## Run from Source (Developers)
 
-### Building an Android Debug APK
 ```bash
-flutter build apk --debug
+git clone https://github.com/Kemeno01/Sakto.git
+cd Sakto
+flutter pub get
+flutter run
 ```
-The generated APK will be located at `build/app/outputs/flutter-apk/app-debug.apk`.
-
----
-
-## Project Structure
-
-```text
-Sakto/
-├── lib/
-│   ├── main.dart          # Models, AppState, Home, Lists, Split, Analytics & UI sheets
-│   ├── auth.dart          # Landing page, offline login, Google sign-in (Supabase)
-│   ├── drawer.dart        # Profile drawer and Settings page (theme, data, sign out)
-│   └── supabase_config.dart # Your Supabase URL + anon key
-├── android/               # Android platform configuration
-├── ios/                   # iOS platform configuration
-├── web/                   # Web platform configuration
-├── windows/               # Windows desktop configuration
-├── macos/                 # macOS desktop configuration
-├── linux/                 # Linux desktop configuration
-├── test/                  # Widget/unit tests
-├── pubspec.yaml           # Project metadata & dependencies
-└── README.md              # Project documentation
-```
-
----
-
-## Troubleshooting
-
-- **`'C:\Users\...' is not recognized as an internal or external command` (Windows):**
-  Move your Flutter SDK to a path without spaces (e.g., `C:\flutter`), update your Windows `PATH`, update `android/local.properties`, and run `flutter clean && flutter pub get`.
-- **`No pubspec.yaml file found`:**
-  Make sure your terminal is inside the `Sakto` root folder (`cd Sakto`) before running Flutter commands.
-- **No devices found:**
-  Enable **Developer Options → USB Debugging** on your Android phone (or launch an emulator), then run `flutter devices`.

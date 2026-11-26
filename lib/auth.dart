@@ -1,8 +1,5 @@
 part of 'main.dart';
 
-// ============================================================
-// 12. ACCOUNTS (offline name, or Google through Supabase)
-// ============================================================
 bool _sbOk = false;
 SupabaseClient? get sb => _sbOk ? Supabase.instance.client : null;
 
@@ -11,7 +8,7 @@ Future<void> initAuth() async {
   try {
     await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseAnonKey);
     _sbOk = true;
-    // Fires when the user comes back from the Google page (deep link) and when a saved session is restored.
+
     sb!.auth.onAuthStateChange.listen((data) {
       final u = data.session?.user;
       if (u == null) return;
@@ -25,7 +22,7 @@ Future<void> initAuth() async {
 Future<void> _onGoogleUser(User u) async {
   final m = u.userMetadata ?? {};
   final googleName = (m['full_name'] ?? m['name'] ?? u.email?.split('@').first ?? 'Friend').toString();
-  // keep a name the user already edited for this same account
+
   final keep = app.authMode == 'google' && app.userEmail == u.email && app.userName != null;
   final wasIn = app.signedIn && app.authMode == 'google';
   await app.setProfile(
@@ -38,7 +35,6 @@ Future<void> _onGoogleUser(User u) async {
   if (!wasIn) toast('Signed in as ${app.userName}');
 }
 
-/// Saves the account to the Supabase `profiles` table (see SUPABASE_SETUP.md).
 Future<void> syncProfile() async {
   final c = sb, u = c?.auth.currentUser;
   if (c == null || u == null || app.authMode != 'google') return;
@@ -52,7 +48,6 @@ Future<void> syncProfile() async {
   }
 }
 
-/// Saves the Google user's items, tags, splits & history to Supabase `user_data`.
 Future<void> syncCloudData(Map<String, dynamic> data) async {
   final c = sb, u = c?.auth.currentUser;
   if (c == null || u == null || app.authMode != 'google') return;
@@ -67,7 +62,6 @@ Future<void> syncCloudData(Map<String, dynamic> data) async {
   }
 }
 
-/// Loads the Google user's saved data from Supabase `user_data`.
 Future<Map<String, dynamic>?> fetchCloudData() async {
   final c = sb, u = c?.auth.currentUser;
   if (c == null || u == null) return null;
@@ -84,7 +78,7 @@ Future<Map<String, dynamic>?> fetchCloudData() async {
 Future<void> signInWithGoogle() async {
   final c = sb;
   if (c == null) {
-    toast('Google sign-in isn’t set up yet (see SUPABASE_SETUP.md)');
+    toast('Google sign-in is not configured yet.');
     return;
   }
   try {
@@ -105,7 +99,6 @@ Future<void> signOut({bool erase = false}) async {
   await app.clearProfile(erase: erase);
 }
 
-// ---- profile picture / initial ----
 Widget userAvatar(double z) {
   final n = (app.userName ?? '').trim(), url = app.avatarUrl;
   final ini = Text(n.isEmpty ? '?' : n[0].toUpperCase(), style: ts(z * 0.4, w: w7, c: kPr));
@@ -115,15 +108,12 @@ Widget userAvatar(double z) {
       child: url == null ? ini : Image.network(url, width: z, height: z, fit: BoxFit.cover, errorBuilder: (_, _, _) => ini));
 }
 
-// ============================================================
-// 13. LANDING PAGE (shown until the user picks a name or signs in)
-// ============================================================
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
   @override
   Widget build(BuildContext context) => ListenableBuilder(
       listenable: app,
-      // the key rebuilds every screen when the theme changes, so all colors update at once
+
       builder: (_, _) => KeyedSubtree(key: ValueKey('${app.dark}-${app.signedIn}'), child: app.signedIn ? const Shell() : const LandingPage()));
 }
 
