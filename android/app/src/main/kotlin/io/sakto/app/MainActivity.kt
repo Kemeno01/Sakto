@@ -1,4 +1,4 @@
-package com.example.spent_to_sawa
+package io.sakto.app
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -7,21 +7,34 @@ class StatsPage extends StatelessWidget {
       listenable: app,
       builder: (c, _) {
         final ex = app.an == 'Expenses', rg = app.rng, a = rg.from, b = rg.to, n = spanDays(a, b);
+        final expAll = app.expRows(a, b), incAll = app.incRows(a, b);
+        final expTotal = expAll.fold(0.0, (t, r) => t + r.amt);
+        final incTotal = incAll.fold(0.0, (t, r) => t + r.amt);
+        final net = incTotal - expTotal;
         List<ERow> fetch(String x, String y) => ex ? app.expRows(x, y) : app.incRows(x, y);
-        final rows = fetch(a, b), T = rows.fold(0.0, (t, r) => t + r.amt);
+        final rows = ex ? expAll : incAll, T = ex ? expTotal : incTotal;
         final P = fetch(addD(a, -n), addD(a, -1)).fold(0.0, (t, r) => t + r.amt);
         final ch = P > 0 ? ((T - P) / P * 100).round() : null;
         final bad = ((ch ?? 0) > 0) == ex;
         final bars = app.series(a, b, rows);
         var top = 0;
         for (var k = 0; k < bars.length; k++) { if (bars[k].v > bars[top].v) top = k; }
-        final groups = ex
-            ? (rows.map((r) => r.bucket).toSet().map((k) => Group(k, rows.where((r) => r.bucket == k).fold(0.0, (t, r) => t + r.amt), app.col(k)[1])).where((g) => g.v > 0).toList()..sort((p, q) => q.v.compareTo(p.v)))
-            : rows.map((r) => Group(r.name, r.amt, kPr)).toList();
+        final groups = (rows.map((r) => r.bucket.isEmpty ? 'Other' : r.bucket).toSet().map((k) {
+          final col = ex ? app.col(k)[1] : kPal[kIncomeCats.indexOf(k).clamp(0, kPal.length - 1)][1];
+          return Group(k, rows.where((r) => (r.bucket.isEmpty ? 'Other' : r.bucket) == k).fold(0.0, (t, r) => t + r.amt), col);
+        }).where((g) => g.v > 0).toList()..sort((p, q) => q.v.compareTo(p.v)));
+        final incomeItems = ex ? const <Income>[] : app.incEntries(a, b);
         const presets = {'7d': '7 days', '30d': '30 days', 'month': 'This month', '3m': '3 months', 'custom': 'Custom'};
         Widget seg(String t, bool on, String v) => Expanded(child: InkWell(onTap: () => app.setAn(v), borderRadius: BorderRadius.circular(18),
             child: Container(height: 38, alignment: Alignment.center, decoration: BoxDecoration(color: on ? kCard : null, borderRadius: BorderRadius.circular(18)), child: Text(t, style: ts(15, w: w6)))));
-        return SafeArea(bottom: false, child: ListView(padding: const EdgeInsets.fromLTRB(18, 0, 18, 110), children: [
+        return SafeArea(bottom: false, child: RefreshIndicator(
+            color: kPr,
+            onRefresh: () async {
+              final res = await app.refreshFromCloud();
+              if (res == 'offline') { toast('Offline'); }
+              else if (res == 'cloud' || res == 'merged') { toast('Synced'); }
+            },
+            child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.fromLTRB(18, 0, 18, 110), children: [
           titleRow('Analytics & Report', () => app.go(0)),
           InkWell(onTap: () => showSheet(c, const RangeSheet()), borderRadius: BorderRadius.circular(16),
               child: cardBox(Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -37,8 +50,29 @@ class StatsPage extends StatelessWidget {
                       decoration: BoxDecoration(color: rg.preset == e.key ? kInk : kCard, borderRadius: BorderRadius.circular(18), border: rg.preset == e.key ? null : Border.all(color: kLn)),
                       child: Text(e.value, style: ts(12, w: FontWeight.w500, c: rg.preset == e.key ? kCard : kInk))))),
           ])),
+          if (incTotal > 0 || expTotal > 0) ...[
+            gap(12),
+            cardBox(Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Income', style: ts(10, c: kMut)),
+                Text(fmt(incTotal), style: ts(13, w: w7, c: kGreen), overflow: TextOverflow.ellipsis),
+              ])),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Expenses', style: ts(10, c: kMut)),
+                Text(fmt(expTotal), style: ts(13, w: w7), overflow: TextOverflow.ellipsis),
+              ])),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('Net', style: ts(10, c: kMut)),
+                Text('${net > 0 ? '+' : ''}${fmt(net)}', style: ts(14, w: w7, c: net >= 0 ? kGreen : kWr), overflow: TextOverflow.ellipsis),
+              ])),
+            ]), p: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
+          ],
           gap(12),
           Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(22)), child: Row(children: [seg('Expenses', ex, 'Expenses'), seg('Income', !ex, 'Income')])),
+          if (!ex) ...[
+            gap(10),
+            bigBtn('+ Add Income', () => showSheet(c, const AddIncomeSheet())),
+          ],
           gap(14),
           cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Total ${ex ? 'expenses' : 'income'} · $n day${n > 1 ? 's' : ''}', style: ts(11, c: kMut)),
@@ -59,24 +93,127 @@ class StatsPage extends StatelessWidget {
               Text('Highest: ${bars[top].label} · ${fmt(bars[top].v)}', style: ts(11, c: kMut)),
             ]), m: const EdgeInsets.only(bottom: 12)),
             cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(ex ? 'Where it went' : 'Where it came from', style: ts(14, w: w7)),
-              if (ex) Center(child: SizedBox(width: 200, height: 200, child: Stack(alignment: Alignment.center, children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text(ex ? 'Where it went' : 'Where it came from', style: ts(14, w: w7)),
+                if (ex)
+                  InkWell(
+                      onTap: () => showSheet(c, ExpenseDrilldownSheet(title: 'All expenses', range: rangeLabel(a, b), rows: expAll)),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), child: Text('See items ›', style: ts(11, w: w6, c: kPrText)))),
+              ]),
+              Center(child: SizedBox(width: 200, height: 200, child: Stack(alignment: Alignment.center, children: [
                 CustomPaint(size: const Size(200, 200), painter: DonutPainter(groups, T)),
                 Column(mainAxisSize: MainAxisSize.min, children: [Text('Total', style: ts(10, c: kMut)), Text(fmt(T), style: ts(16, w: w7))]),
               ]))),
               for (final g in groups)
-                Padding(padding: const EdgeInsets.only(top: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Flexible(child: Text.rich(TextSpan(children: [TextSpan(text: g.name, style: ts(13, w: w7)), TextSpan(text: '  ${(g.v / T * 100).round()}% of total', style: ts(11, c: kMut))]))),
-                    Text(fmt(g.v), style: ts(14, w: w7)),
-                  ]),
-                  gap(5), progress((g.v / T * 100).round(), track: g.color.withValues(alpha: .2), fill: g.color),
-                ])),
+                InkWell(
+                    onTap: ex
+                        ? () {
+                          final filtered = expAll.where((r) => (r.bucket.isEmpty ? 'Other' : r.bucket) == g.name).toList();
+                          showSheet(c, ExpenseDrilldownSheet(title: g.name, range: rangeLabel(a, b), rows: filtered));
+                        }
+                        : null,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(padding: const EdgeInsets.only(top: 12, bottom: 2), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                        Flexible(child: Text.rich(TextSpan(children: [TextSpan(text: g.name, style: ts(13, w: w7)), TextSpan(text: '  ${(g.v / T * 100).round()}%', style: ts(11, c: kMut))]))),
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text(fmt(g.v), style: ts(14, w: w7)),
+                          if (ex) Icon(Icons.chevron_right_rounded, size: 16, color: kMut),
+                        ]),
+                      ]),
+                      gap(5), progress((g.v / T * 100).round(), track: g.color.withValues(alpha: .2), fill: g.color),
+                    ]))),
             ])),
+            if (!ex && incomeItems.isNotEmpty) ...[
+              gap(12),
+              cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Income entries (${incomeItems.length})', style: ts(14, w: w7)),
+                gap(6),
+                for (final item in incomeItems)
+                  Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(item.note.isEmpty ? item.cat : '${item.cat} · ${item.note}', style: ts(13, w: w6)),
+                          Text(dayLabel(item.d), style: ts(11, c: kMut)),
+                        ])),
+                        Text(fmt(item.a), style: ts(14, w: w7, c: kGreen)),
+                        PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert, size: 18, color: kMut),
+                            onSelected: (v) {
+                              if (v == 'edit') {
+                                showSheet(c, AddIncomeSheet(existing: item));
+                              } else if (v == 'del') {
+                                app.deleteIncome(item);
+                                toast('Income entry deleted');
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(value: 'edit', child: Text('✎  Edit')),
+                              PopupMenuItem(value: 'del', child: Text('🗑  Delete', style: TextStyle(color: kWr))),
+                            ]),
+                      ])),
+              ])),
+            ],
           ] else
-            cardBox(Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Center(child: Text('No data in this range yet. Save a list from Home → date → “Save today’s list”, or pick a wider range.', textAlign: TextAlign.center, style: ts(11, c: kMut))))),
-        ]));
+            cardBox(Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Center(child: Text(
+                ex ? 'No expenses in this range' : 'No income in this range',
+                textAlign: TextAlign.center, style: ts(11, c: kMut))))),
+        ])));
       });
+}
+
+class ExpenseDrilldownSheet extends StatelessWidget {
+  final String title, range;
+  final List<ERow> rows;
+  const ExpenseDrilldownSheet({super.key, required this.title, required this.range, required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    final sorted = List.of(rows)..sort((a, b) => b.date.compareTo(a.date));
+    final total = sorted.fold(0.0, (a, r) => a + r.amt);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: ts(20, w: w7), overflow: TextOverflow.ellipsis),
+          Text('$range · ${sorted.length} item${sorted.length == 1 ? '' : 's'}', style: ts(11, c: kMut)),
+        ])),
+        closeBtn(context),
+      ]),
+      gap(10),
+      cardBox(
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('Total', style: ts(12, c: kMut)),
+            Text(fmt(total), style: ts(18, w: w7, c: kPrText)),
+          ]),
+          color: kBg,
+          p: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+      gap(10),
+      ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 340),
+          child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: sorted.length,
+              separatorBuilder: (_, _) => Divider(height: 1, color: kLn),
+              itemBuilder: (_, idx) {
+                final r = sorted[idx];
+                return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(children: [
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(r.name, style: ts(14, w: w6)),
+                        Text('${dayLabel(r.date)}${title == 'All expenses' && r.bucket.isNotEmpty ? ' · #${r.bucket}' : ''}${r.split ? ' · Shared' : ''}', style: ts(11, c: kMut)),
+                      ])),
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text(fmt(r.amt), style: ts(14, w: w7)),
+                        if (r.split && (r.full - r.amt).abs() > 0.005) Text('of ${fmt(r.full)}', style: ts(10, c: kMut)),
+                      ]),
+                    ]));
+              })),
+    ]);
+  }
 }
 
 class BarsPainter extends CustomPainter {
@@ -161,4 +298,89 @@ class RangeSheet extends StatelessWidget {
       gap(14), bigBtn('Apply range', () => Navigator.pop(c)),
     ]);
   });
+}
+
+class AddIncomeSheet extends StatefulWidget {
+  final Income? existing;
+  const AddIncomeSheet({super.key, this.existing});
+  @override
+  State<AddIncomeSheet> createState() => _AddIncomeState();
+}
+class _AddIncomeState extends State<AddIncomeSheet> {
+  late final amtC = TextEditingController(text: widget.existing != null ? numStr(widget.existing!.a) : '');
+  late final noteC = TextEditingController(text: widget.existing?.note ?? '');
+  late String cat = widget.existing?.cat ?? 'Allowance';
+  late String date = widget.existing?.d ?? app.today;
+  bool addToCash = true;
+
+  @override
+  void dispose() {
+    amtC.dispose();
+    noteC.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final editing = widget.existing != null;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(editing ? 'Edit Income' : 'Add Income', style: ts(20, w: w7)),
+        closeBtn(context),
+      ]),
+      label('Amount (₱)'),
+      TextField(controller: amtC, autofocus: !editing, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: deco('0.00')),
+      label('Category'),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final k in kIncomeCats)
+          InkWell(
+              onTap: () => setState(() => cat = k),
+              borderRadius: BorderRadius.circular(18),
+              child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(color: cat == k ? kPr : kBg, borderRadius: BorderRadius.circular(18), border: Border.all(color: cat == k ? kPr : kLn)),
+                  child: Text(k, style: ts(12, w: w6, c: cat == k ? Colors.white : kInk)))),
+      ]),
+      label('Note (optional)'),
+      TextField(controller: noteC, maxLength: 40, textCapitalization: TextCapitalization.sentences, decoration: deco('e.g. Weekly allowance, Client payout')),
+      label('Date'),
+      InkWell(
+          onTap: () async {
+            final d = await showDatePicker(context: context, initialDate: toD(date), firstDate: DateTime(2020), lastDate: app.now);
+            if (d != null) setState(() => date = dkey(d));
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              decoration: BoxDecoration(color: kLn, borderRadius: BorderRadius.circular(12)),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('${dayLabel(date)}, ${toD(date).year}', style: ts(13, w: w6)),
+                Icon(Icons.calendar_today_rounded, size: 16, color: kPrText),
+              ]))),
+      if (!editing) ...[
+        gap(10),
+        cardBox(
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Expanded(child: Text('Also add to Cash on hand', style: ts(13, w: w6))),
+              Switch(value: addToCash, activeThumbColor: Colors.white, activeTrackColor: kPr, onChanged: (v) => setState(() => addToCash = v)),
+            ]),
+            color: kBg,
+            p: const EdgeInsets.symmetric(horizontal: 12, vertical: 2)),
+      ],
+      gap(14),
+      bigBtn(editing ? 'Save changes' : 'Save income', () {
+        final v = double.tryParse(amtC.text);
+        if (v == null || v <= 0) { toast('Enter a valid amount'); return; }
+        if (editing) {
+          app.editIncome(widget.existing!, v, cat, noteC.text, date);
+          toast('Income updated');
+        } else {
+          app.addIncome(v, cat: cat, note: noteC.text, date: date, addToCash: addToCash);
+          toast('Income added');
+        }
+        Navigator.pop(context);
+      }),
+    ]);
+  }
 }
