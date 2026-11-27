@@ -6,12 +6,12 @@ A budgeting, expense list, and bill-splitting app built with Flutter (Philippine
 
 ## Download (Android)
 
-Download the latest signed `Sakto.apk` from [**GitHub Releases**](https://github.com/Kemeno01/Sakto/releases) *(APK binaries are no longer committed to git)*.
+Download the latest `Sakto.apk` directly from [**GitHub Releases**](https://github.com/Kemeno01/Sakto/releases).
 
 **How to install on your phone:**
-1. Download `Sakto.apk` from the latest Release.
-2. Open the downloaded `Sakto.apk` file on your Android phone.
-3. If prompted, allow **Install from unknown sources**, then tap **Install**.
+1. Download `Sakto.apk` from the latest Release on GitHub.
+2. Open the downloaded `Sakto.apk` file on your Android device.
+3. If prompted, enable **Allow from this source / Install from unknown sources**, then tap **Install**.
 
 ---
 
