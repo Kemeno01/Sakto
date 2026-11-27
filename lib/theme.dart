@@ -26,13 +26,6 @@ const List<List<Color>> kPal = [
   [Color(0xFFE3E8FF), Color(0xFF2F3FA8)], [Color(0xFFD9F5F2), Color(0xFF0B6B63)],
 ];
 
-const List<List<Color>> kPc = [
-  [Color(0xFFEDE7FF), Color(0xFF5B2EE0)], [Color(0xFFDCFCE7), Color(0xFF166534)],
-  [Color(0xFFFEF3C7), Color(0xFFB45309)], [Color(0xFFDBEAFE), Color(0xFF1D4ED8)],
-  [Color(0xFFFCE7F3), Color(0xFFBE185D)], [Color(0xFFCCFBF1), Color(0xFF0F766E)],
-];
-List<Color> pcOf(String p) => p == 'Me' ? kPc[0] : kPc[1 + p.codeUnits.fold(0, (a, c) => a + c) % 5];
-
 String fmt(double n) {
   final s = n.abs().toStringAsFixed(2).split('.');
   final w = s[0].replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
@@ -49,14 +42,51 @@ String m3(DateTime d) => kMonths[d.month - 1].substring(0, 3);
 String dayLabel(String k) { final d = toD(k); return '${kWd[d.weekday % 7]}, ${m3(d)} ${d.day}'; }
 String rangeLabel(String a, String b) => '${m3(toD(a))} ${toD(a).day} – ${m3(toD(b))} ${toD(b).day}, ${toD(b).year}';
 
-void toast(String m) {
+void toast(String m, {String? actionLabel, VoidCallback? onAction}) {
   final o = navKey.currentState?.overlay;
   if (o == null) return;
-  final e = OverlayEntry(builder: (_) => Positioned(left: 0, right: 0, bottom: 110,
-      child: IgnorePointer(child: Center(child: Material(color: const Color(0xFF1B1630), borderRadius: BorderRadius.circular(20),
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Text(m, style: const TextStyle(color: Colors.white, fontSize: 12))))))));
+  late OverlayEntry e;
+  Timer? timer;
+  var removed = false;
+  void dismiss() {
+    if (!removed) {
+      removed = true;
+      timer?.cancel();
+      e.remove();
+    }
+  }
+  final hasAction = actionLabel != null && onAction != null;
+  final pill = Material(
+      color: const Color(0xFF1B1630),
+      borderRadius: BorderRadius.circular(20),
+      elevation: 4,
+      child: Padding(
+          padding: EdgeInsets.fromLTRB(16, hasAction ? 4 : 10, hasAction ? 8 : 16, hasAction ? 4 : 10),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(child: Text(m, style: const TextStyle(color: Colors.white, fontSize: 12), overflow: TextOverflow.ellipsis)),
+            if (hasAction) ...[
+              const SizedBox(width: 8),
+              TextButton(
+                  onPressed: () {
+                    dismiss();
+                    onAction();
+                  },
+                  style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFB794FF),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                  child: Text(actionLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+            ],
+          ])));
+  e = OverlayEntry(
+      builder: (_) => Positioned(
+          left: 20,
+          right: 20,
+          bottom: 110,
+          child: hasAction ? Center(child: pill) : IgnorePointer(child: Center(child: pill))));
   o.insert(e);
-  Future.delayed(const Duration(milliseconds: 1900), () => e.remove());
+  timer = Timer(Duration(milliseconds: hasAction ? 3600 : 1900), dismiss);
 }
 
 TextStyle ts(double s, {FontWeight w = FontWeight.w400, Color? c}) => TextStyle(fontSize: s, fontWeight: w, color: c ?? kInk);
@@ -98,19 +128,50 @@ class TagChip extends StatelessWidget {
   const TagChip(this.b, {super.key});
   @override
   Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-      decoration: BoxDecoration(color: app.col(b)[0], borderRadius: BorderRadius.circular(8)),
-      child: Text(b, style: ts(10, w: w6, c: app.col(b)[1])));
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: kBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kLn, width: 1),
+      ),
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(text: '#', style: ts(10, w: w7, c: kMut)),
+          TextSpan(text: ' $b', style: ts(11, w: w6, c: kInk)),
+        ]),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ));
 }
 
-Widget dotAv(String p, double z) {
-  final c = pcOf(p);
-  return Container(width: z, height: z, alignment: Alignment.center,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: c[0], border: Border.all(color: kCard, width: 2)),
-      child: Text(p.isEmpty ? '?' : p[0].toUpperCase(), style: ts(12, w: w7, c: c[1])));
+Widget dotAv(String p, double z, {bool border = true}) {
+  final bytes = app.personPhotoBytes(p);
+  final netUrl = (p == 'Me' && bytes == null) ? app.avatarUrl : null;
+  final placeholder = Icon(Icons.person_rounded, size: z * 0.58, color: kMut);
+  Widget child;
+  if (bytes != null) {
+    child = Image.memory(bytes, width: z, height: z, fit: BoxFit.cover, gaplessPlayback: true);
+  } else if (netUrl != null) {
+    child = Image.network(netUrl, width: z, height: z, fit: BoxFit.cover, errorBuilder: (_, _, _) => placeholder);
+  } else {
+    child = placeholder;
+  }
+  return Container(
+      width: z,
+      height: z,
+      alignment: Alignment.center,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: isDark ? const Color(0xFF2B2738) : const Color(0xFFE9E7F0),
+        border: border ? Border.all(color: kCard, width: 1.5) : null,
+      ),
+      child: child);
 }
+
 Widget avStack(List<String> ps, double z) {
   final l = ps.take(4).toList();
+  if (l.isEmpty) return const SizedBox.shrink();
   return SizedBox(width: z + (l.length - 1) * z * 0.7, height: z, child: Stack(children: [for (var k = 0; k < l.length; k++) Positioned(left: k * z * 0.7, child: dotAv(l[k], z))]));
 }
 
@@ -137,6 +198,11 @@ class NumField extends StatefulWidget {
 }
 class _NumFieldState extends State<NumField> {
   late final c = TextEditingController(text: widget.value == 0 ? '' : numStr(widget.value));
+  @override
+  void dispose() {
+    c.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) => TextField(
       controller: c, keyboardType: const TextInputType.numberWithOptions(decimal: true),

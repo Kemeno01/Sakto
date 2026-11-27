@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +13,7 @@ import 'supabase_config.dart';
 
 part 'theme.dart';
 part 'models.dart';
+part 'storage.dart';
 part 'app_state.dart';
 part 'auth.dart';
 part 'drawer.dart';
@@ -50,20 +51,22 @@ class _SpentAppState extends State<SpentApp> with WidgetsBindingObserver {
   }
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) app.checkRollover();
+    if (state == AppLifecycleState.resumed) {
+      app.checkRollover();
+      app.retryPendingCloudSync();
+    }
   }
   @override
   Widget build(BuildContext context) => ListenableBuilder(
       listenable: app,
       builder: (_, _) {
         final br = isDark ? Brightness.dark : Brightness.light;
-        final base = ThemeData(useMaterial3: true, brightness: br);
+        final base = ThemeData(useMaterial3: true, brightness: br, fontFamily: 'Poppins');
         return MaterialApp(
             title: 'Sakto', debugShowCheckedModeBanner: false, navigatorKey: navKey,
             theme: base.copyWith(
                 colorScheme: ColorScheme.fromSeed(seedColor: kPr, brightness: br),
                 scaffoldBackgroundColor: kBg,
-                textTheme: GoogleFonts.poppinsTextTheme(base.textTheme),
                 popupMenuTheme: PopupMenuThemeData(color: kCard),
                 dialogTheme: DialogThemeData(backgroundColor: kCard),
                 bottomSheetTheme: BottomSheetThemeData(backgroundColor: kCard)),

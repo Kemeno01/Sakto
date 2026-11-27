@@ -19,9 +19,24 @@ Future<void> initAuth() async {
   }
 }
 
+const _migrationKey = 'sakto-pending-local-migration-v1';
+
 Future<void> _onGoogleUser(User u) async {
   final m = u.userMetadata ?? {};
   final googleName = (m['full_name'] ?? m['name'] ?? u.email?.split('@').first ?? 'Friend').toString();
+
+  Map<String, dynamic>? localSnapshot;
+  if (app.authMode == 'local' && app.hasData) {
+    localSnapshot = app.toJson();
+  }
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final pendingRaw = prefs.getString(_migrationKey);
+    if (pendingRaw != null) {
+      localSnapshot ??= jsonDecode(pendingRaw) as Map<String, dynamic>;
+      await prefs.remove(_migrationKey);
+    }
+  } catch (_) {}
 
   final keep = app.authMode == 'google' && app.userEmail == u.email && app.userName != null;
   final wasIn = app.signedIn && app.authMode == 'google';
@@ -31,8 +46,14 @@ Future<void> _onGoogleUser(User u) async {
       email: u.email,
       avatar: (m['avatar_url'] ?? m['picture']) as String?,
       mode: 'google');
+  var migrated = false;
+  if (localSnapshot != null) {
+    migrated = await app.mergeDataMap(localSnapshot);
+  }
   syncProfile();
-  if (!wasIn) toast('Signed in as ${app.userName}');
+  if (!wasIn) {
+    toast(migrated ? 'Signed in & migrated your offline data!' : 'Signed in as ${app.userName}');
+  }
 }
 
 Future<void> syncProfile() async {
@@ -48,31 +69,61 @@ Future<void> syncProfile() async {
   }
 }
 
-Future<void> syncCloudData(Map<String, dynamic> data) async {
+class CloudSnapshot {
+  final Map<String, dynamic> data;
+  final DateTime? updatedAt;
+  const CloudSnapshot(this.data, this.updatedAt);
+}
+
+Future<bool> syncCloudData(Map<String, dynamic> data, String updatedAtIso) async {
   final c = sb, u = c?.auth.currentUser;
-  if (c == null || u == null || app.authMode != 'google') return;
+  if (c == null || u == null || app.authMode != 'google') return false;
   try {
     await c.from('user_data').upsert({
       'id': u.id,
       'data': data,
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'updated_at': updatedAtIso,
     });
+    return true;
   } catch (e) {
     debugPrint('Cloud data sync failed: $e');
+    return false;
   }
 }
 
-Future<Map<String, dynamic>?> fetchCloudData() async {
+Future<CloudSnapshot?> fetchCloudData() async {
   final c = sb, u = c?.auth.currentUser;
   if (c == null || u == null) return null;
   try {
-    final row = await c.from('user_data').select('data').eq('id', u.id).maybeSingle();
+    final row = await c.from('user_data').select('data, updated_at').eq('id', u.id).maybeSingle();
     final d = row?['data'];
-    return d is Map<String, dynamic> ? d : null;
+    if (d is! Map<String, dynamic>) return null;
+    final ts = DateTime.tryParse((row?['updated_at'] as String?) ?? '') ?? DateTime.tryParse((d['updatedAt'] as String?) ?? '');
+    return CloudSnapshot(d, ts);
   } catch (e) {
     debugPrint('Cloud data fetch failed: $e');
     return null;
   }
+}
+
+Future<bool> deleteCloudAccount() async {
+  final c = sb, u = c?.auth.currentUser;
+  if (c == null || u == null) return true;
+  var ok = true;
+  try {
+    await c.from('user_data').delete().eq('id', u.id);
+    await c.from('profiles').delete().eq('id', u.id);
+  } catch (e) {
+    debugPrint('Cloud table deletion failed: $e');
+    ok = false;
+  }
+  try {
+    await c.functions.invoke('delete-account');
+  } catch (e) {
+    // Edge Function may not be deployed yet; user_data & profiles were already deleted via RLS.
+    debugPrint('delete-account edge function skipped: $e');
+  }
+  return ok;
 }
 
 Future<void> signInWithGoogle() async {
@@ -80,6 +131,11 @@ Future<void> signInWithGoogle() async {
   if (c == null) {
     toast('Google sign-in is not configured yet.');
     return;
+  }
+  if (app.authMode == 'local' && app.hasData) {
+    try {
+      await (await SharedPreferences.getInstance()).setString(_migrationKey, jsonEncode(app.toJson()));
+    } catch (_) {}
   }
   try {
     await c.auth.signInWithOAuth(
@@ -94,18 +150,38 @@ Future<void> signInWithGoogle() async {
 }
 
 Future<void> signOut({bool erase = false}) async {
+  if (erase && app.authMode == 'google') {
+    await deleteCloudAccount();
+  }
   try { await sb?.auth.signOut(); } catch (_) {}
   navKey.currentState?.popUntil((r) => r.isFirst);
   await app.clearProfile(erase: erase);
 }
 
+Future<void> deleteAccountAndSignOut() async {
+  final ok = await deleteCloudAccount();
+  try { await sb?.auth.signOut(); } catch (_) {}
+  navKey.currentState?.popUntil((r) => r.isFirst);
+  await app.clearProfile(erase: true);
+  toast(ok ? 'Account and cloud data deleted' : 'Local data erased; check connection for cloud');
+}
+
 Widget userAvatar(double z) {
-  final n = (app.userName ?? '').trim(), url = app.avatarUrl;
-  final ini = Text(n.isEmpty ? '?' : n[0].toUpperCase(), style: ts(z * 0.4, w: w7, c: kPr));
+  final bytes = app.personPhotoBytes('Me');
+  final url = app.avatarUrl;
+  final fallback = Icon(Icons.person_rounded, size: z * 0.56, color: kMut);
+  Widget child;
+  if (bytes != null) {
+    child = Image.memory(bytes, width: z, height: z, fit: BoxFit.cover, gaplessPlayback: true);
+  } else if (url != null) {
+    child = Image.network(url, width: z, height: z, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback);
+  } else {
+    child = fallback;
+  }
   return Container(
       width: z, height: z, alignment: Alignment.center, clipBehavior: Clip.antiAlias,
-      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-      child: url == null ? ini : Image.network(url, width: z, height: z, fit: BoxFit.cover, errorBuilder: (_, _, _) => ini));
+      decoration: const BoxDecoration(color: Color(0xFFE9E7F0), shape: BoxShape.circle),
+      child: child);
 }
 
 class AuthGate extends StatelessWidget {
@@ -113,8 +189,7 @@ class AuthGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
       listenable: app,
-
-      builder: (_, _) => KeyedSubtree(key: ValueKey('${app.dark}-${app.signedIn}'), child: app.signedIn ? const Shell() : const LandingPage()));
+      builder: (_, _) => KeyedSubtree(key: ValueKey(app.signedIn), child: app.signedIn ? const Shell() : const LandingPage()));
 }
 
 class LandingPage extends StatefulWidget {
@@ -126,6 +201,12 @@ class LandingPage extends StatefulWidget {
 class _LandingState extends State<LandingPage> {
   final nameC = TextEditingController();
   bool busy = false;
+
+  @override
+  void dispose() {
+    nameC.dispose();
+    super.dispose();
+  }
 
   Future<void> goOffline() async {
     final n = nameC.text.trim();
@@ -204,8 +285,6 @@ class _LandingState extends State<LandingPage> {
                                 const SizedBox(width: 10),
                                 Text('Continue with Google', style: ts(15, w: w6, c: Colors.white)),
                               ]))),
-                      gap(14),
-                      Center(child: Text('Google sign-in syncs your account online across devices.', textAlign: TextAlign.center, style: ts(11, c: Colors.white70))),
                     ])))));
   }
 }

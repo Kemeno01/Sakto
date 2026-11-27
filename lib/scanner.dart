@@ -64,18 +64,12 @@ class _ScanReceiptState extends State<ScanReceiptPage> {
   String? _store;
   double _discount = 0;
   double _fee = 0;
+  int _scanSeq = 0;
   List<_DraftItem> _drafts = [];
   String? _tag = (app.sel.length == 1 && app.buckets.contains(app.sel.first))
       ? app.sel.first
       : (app.buckets.isEmpty ? null : app.buckets.first);
   bool _checkOnAdd = true;
-
-  @override
-  void initState() {
-    super.initState();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) => _capture(ImageSource.camera));
-  }
 
   Future<void> _capture(ImageSource source) async {
     try {
@@ -87,7 +81,7 @@ class _ScanReceiptState extends State<ScanReceiptPage> {
       );
       if (file == null) return;
       final bytes = await file.readAsBytes();
-      final mime = file.mimeType ?? 'image/jpeg';
+      final mime = _detectMime(file);
       if (!mounted) return;
       setState(() {
         _photoBytes = bytes;
@@ -109,16 +103,54 @@ class _ScanReceiptState extends State<ScanReceiptPage> {
     }
   }
 
+  String _detectMime(XFile file) {
+    final m = file.mimeType;
+    if (m != null && m.startsWith('image/')) return m;
+    final p = file.path.toLowerCase();
+    if (p.endsWith('.png')) return 'image/png';
+    if (p.endsWith('.webp')) return 'image/webp';
+    if (p.endsWith('.heic') || p.endsWith('.heif')) return 'image/heic';
+    return 'image/jpeg';
+  }
+
+  Future<Map<String, dynamic>?> _tryEdgeScanner(Uint8List bytes, String mime) async {
+    final c = sb;
+    if (c == null) return null;
+    try {
+      final resp = await c.functions
+          .invoke('scan-receipt', body: {'imageBase64': base64Encode(bytes), 'mimeType': mime})
+          .timeout(const Duration(seconds: 30));
+      if (resp.status == 200 && resp.data is Map) {
+        return Map<String, dynamic>.from(resp.data as Map);
+      }
+      if (useEdgeScanner) {
+        final err = (resp.data is Map) ? (resp.data as Map)['error']?.toString() : null;
+        throw Exception(err ?? 'Scanner service error (${resp.status})');
+      }
+    } catch (e) {
+      if (useEdgeScanner || !hasLocalGeminiKey) rethrow;
+    }
+    return null;
+  }
+
   Future<void> _analyzeReceipt(Uint8List bytes, String mime) async {
     if (!aiReady) {
       setState(() {
         _scanning = false;
-        _error = 'Gemini API key is not set yet. Paste your free key in lib/ai_config.dart (from aistudio.google.com/apikey).';
+        _error = 'Receipt scanner is not configured. Deploy the scan-receipt Supabase Edge Function or run with --dart-define-from-file=secrets.json.';
       });
       return;
     }
     try {
-      const prompt = '''
+      Map<String, dynamic>? parsed;
+      if (useEdgeScanner || !hasLocalGeminiKey) {
+        parsed = await _tryEdgeScanner(bytes, mime);
+      }
+      if (parsed == null) {
+        if (!hasLocalGeminiKey) {
+          throw Exception('Scanner server unavailable. Deploy the scan-receipt Edge Function or check your connection.');
+        }
+        const prompt = '''
 Extract every purchased item, discount, and extra fee/tax from this receipt image and return ONLY valid JSON in this exact format:
 {
   "store": "Short store or restaurant name (optional, max 20 chars)",
@@ -137,40 +169,59 @@ Rules:
 - Keep item names clean and readable.
 - If no items are readable, return {"store": "", "discount": 0, "fee": 0, "items": []}.
 ''';
-      final body = jsonEncode({
-        'contents': [
-          {
-            'parts': [
-              {'text': prompt},
-              {'inline_data': {'mime_type': mime, 'data': base64Encode(bytes)}},
-            ],
+        final body = jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {'text': prompt},
+                {'inline_data': {'mime_type': mime, 'data': base64Encode(bytes)}},
+              ],
+            }
+          ],
+          'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.1},
+        });
+        final models = [geminiModel, 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+        http.Response? res;
+        for (var i = 0; i < models.length; i++) {
+          final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${models[i]}:generateContent');
+          try {
+            res = await http
+                .post(
+                  uri,
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': geminiApiKey.trim(),
+                  },
+                  body: body,
+                )
+                .timeout(const Duration(seconds: 30));
+            if (res.statusCode == 200) break;
+            if ((res.statusCode == 503 || res.statusCode == 429 || res.statusCode == 404) && i < models.length - 1) continue;
+            break;
+          } on Exception {
+            if (i < models.length - 1) continue;
+            rethrow;
           }
-        ],
-        'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.1},
-      });
-      final models = [geminiModel, 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-3.8-flash'];
-      http.Response? res;
-      for (var i = 0; i < models.length; i++) {
-        final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${models[i]}:generateContent?key=${geminiApiKey.trim()}');
-        try {
-          res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 15));
-          if (res.statusCode == 200) break;
-          if ((res.statusCode == 503 || res.statusCode == 429 || res.statusCode == 404) && i < models.length - 1) continue;
-          break;
-        } on Exception {
-          if (i < models.length - 1) continue;
-          rethrow;
         }
+        if (res == null || res.statusCode != 200) {
+          final msg = res == null ? null : _extractApiError(res.body);
+          throw Exception(msg ?? 'AI error (${res?.statusCode ?? 'network'})');
+        }
+        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+        final parts = ((((decoded['candidates'] as List?)?.first as Map?)?['content'] as Map?)?['parts'] as List?) ?? const [];
+        String? text;
+        for (final p in parts) {
+          if (p is Map && p['thought'] != true && p['text'] is String && (p['text'] as String).trim().isNotEmpty) {
+            text = p['text'] as String;
+            break;
+          }
+        }
+        if (text == null || text.trim().isEmpty) throw Exception('Empty response from AI');
+        var cleaned = text.trim().replaceAll(RegExp(r'^```(?:json)?\s*|\s*```$'), '').trim();
+        final start = cleaned.indexOf('{'), end = cleaned.lastIndexOf('}');
+        if (start >= 0 && end > start) cleaned = cleaned.substring(start, end + 1);
+        parsed = jsonDecode(cleaned) as Map<String, dynamic>;
       }
-      if (res == null || res.statusCode != 200) {
-        final msg = res == null ? null : _extractApiError(res.body);
-        throw Exception(msg ?? 'AI error (${res?.statusCode ?? 'network'})');
-      }
-      final decoded = jsonDecode(res.body) as Map<String, dynamic>;
-      final text = ((((decoded['candidates'] as List?)?.first as Map?)?['content'] as Map?)?['parts'] as List?)?.first['text'] as String?;
-      if (text == null || text.trim().isEmpty) throw Exception('Empty response from AI');
-      final cleaned = text.trim().replaceAll(RegExp(r'^```(?:json)?\s*|\s*```$'), '');
-      final parsed = jsonDecode(cleaned) as Map<String, dynamic>;
       final store = (parsed['store'] as String?)?.trim();
       final discount = math.max(0.0, (parsed['discount'] as num?)?.toDouble() ?? 0.0);
       final fee = math.max(0.0, (parsed['fee'] as num?)?.toDouble() ?? 0.0);
@@ -189,8 +240,9 @@ Rules:
         _store = (store != null && store.isNotEmpty) ? store : null;
         _discount = discount;
         _fee = fee;
+        _scanSeq++;
         _drafts = list;
-        if (list.isEmpty) _error = 'No items detected. Try retaking a clearer photo of the receipt.';
+        if (list.isEmpty) _error = 'No items detected. Try a clearer photo.';
       });
     } catch (e) {
       if (!mounted) return;
@@ -263,6 +315,7 @@ Rules:
         if (_tag != null && !app.buckets.contains(_tag)) _tag = null;
         final kept = _drafts.where((d) => d.keep).toList();
         final sum = kept.fold(0.0, (a, d) => a + d.amt);
+        final netTotal = math.max(0.0, sum + _fee - _discount);
         final canUseStore = _store != null && !app.buckets.contains(_store);
         return Scaffold(
             backgroundColor: kBg,
@@ -279,13 +332,21 @@ Rules:
                                 borderRadius: BorderRadius.circular(12),
                                 child: Image.memory(_photoBytes!, height: 170, width: double.infinity, fit: BoxFit.cover)),
                             gap(12),
+                          ] else ...[
+                            Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                child: Column(children: [
+                                  Icon(Icons.receipt_long_rounded, size: 36, color: kMut),
+                                  gap(6),
+                                  Text('Choose a receipt photo', style: ts(13, w: w6, c: kMut)),
+                                ])),
                           ],
                           Row(children: [
                             Expanded(
                                 child: ElevatedButton.icon(
                                     onPressed: _scanning ? null : () => _capture(ImageSource.camera),
                                     icon: const Icon(Icons.camera_alt_rounded, size: 18),
-                                    label: Text(_photoBytes == null ? 'Open Camera' : 'Retake', style: ts(13, w: w6, c: Colors.white)),
+                                    label: Text(_photoBytes == null ? 'Camera' : 'Retake', style: ts(13, w: w6, c: Colors.white)),
                                     style: ElevatedButton.styleFrom(backgroundColor: kPr, foregroundColor: Colors.white, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))))),
                             const SizedBox(width: 10),
                             Expanded(
@@ -301,7 +362,7 @@ Rules:
                           cardBox(Row(children: [
                             SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: kPrText)),
                             const SizedBox(width: 14),
-                            Expanded(child: Text('Reading and organizing receipt items...', style: ts(13, w: w6))),
+                            Expanded(child: Text('Scanning receipt...', style: ts(13, w: w6))),
                           ])),
                         if (_error != null)
                           cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -322,7 +383,10 @@ Rules:
 
                           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                             Text('Scanned items (${kept.length})', style: ts(15, w: w7)),
-                            Text(fmt(sum), style: ts(15, w: w7, c: kPrText)),
+                            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                              Text(fmt(netTotal), style: ts(15, w: w7, c: kPrText)),
+                              if (_discount > 0 || _fee > 0) Text('Subtotal ${fmt(sum)}', style: ts(10, c: kMut)),
+                            ]),
                           ]),
                           gap(8),
                           cardBox(
@@ -354,19 +418,19 @@ Rules:
                           if (_discount > 0 || _fee > 0) ...[
                             gap(12),
                             cardBox(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text('Fees & discounts (auto-added to Split)', style: ts(13, w: w7)),
+                              Text('Fees & discounts', style: ts(13, w: w7)),
                               gap(8),
                               Row(children: [
                                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                   Text('Discount (₱)', style: ts(11, c: kMut)),
                                   gap(4),
-                                  NumField(key: ValueKey('sd-$_discount'), value: _discount, onChanged: (v) => _discount = v),
+                                  NumField(key: ValueKey('sd-$_scanSeq'), value: _discount, onChanged: (v) => setState(() => _discount = v)),
                                 ])),
                                 const SizedBox(width: 10),
                                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                   Text('Tax / service (₱)', style: ts(11, c: kMut)),
                                   gap(4),
-                                  NumField(key: ValueKey('sf-$_fee'), value: _fee, onChanged: (v) => _fee = v),
+                                  NumField(key: ValueKey('sf-$_scanSeq'), value: _fee, onChanged: (v) => setState(() => _fee = v)),
                                 ])),
                               ]),
                             ])),
@@ -385,9 +449,10 @@ Rules:
                           Wrap(spacing: 8, runSpacing: 8, children: [
                             if (canUseStore)
                               ActionChip(
-                                  label: Text('+ Create "$_store"', style: ts(12, w: w6, c: kPrText)),
-                                  backgroundColor: kSel,
-                                  side: BorderSide(color: kPr),
+                                  label: Text('+ "$_store"', style: ts(12, w: w6, c: kInk)),
+                                  backgroundColor: kBg,
+                                  side: BorderSide(color: kLn),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                   onPressed: () {
                                     final err = app.saveTag(_store!, null);
                                     if (err == null) { setState(() => _tag = _store); app.lastAdded = null; }
@@ -395,14 +460,14 @@ Rules:
                             for (final b in app.buckets)
                               InkWell(
                                   onTap: () => setState(() => _tag = b),
-                                  borderRadius: BorderRadius.circular(18),
+                                  borderRadius: BorderRadius.circular(10),
                                   child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                                      decoration: BoxDecoration(color: _tag == b ? kPr : kCard, borderRadius: BorderRadius.circular(18), border: Border.all(color: _tag == b ? kPr : kLn)),
-                                      child: Text(b, style: ts(12, w: w6, c: _tag == b ? Colors.white : kInk)))),
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                                      decoration: BoxDecoration(color: _tag == b ? kInk : kCard, borderRadius: BorderRadius.circular(10), border: Border.all(color: _tag == b ? kInk : kLn)),
+                                      child: Text('#$b', style: ts(12, w: w6, c: _tag == b ? kCard : kInk)))),
                           ]),
                           if (app.buckets.isEmpty && !canUseStore)
-                            Padding(padding: const EdgeInsets.only(top: 4), child: Text('Tap + New Tag to create a tag for this receipt.', style: ts(11, c: kMut))),
+                            Padding(padding: const EdgeInsets.only(top: 4), child: Text('No tags yet', style: ts(11, c: kMut))),
                           gap(14),
                           cardBox(
                               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [

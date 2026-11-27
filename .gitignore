@@ -47,3 +47,10 @@ app.*.map.json
 # Widget Preview related
 .widget_preview/
 secrets.json
+
+# Release binaries & signing keystores (publish APKs via GitHub Releases instead)
+releases/*.apk
+android/key.properties
+*.jks
+*.keystore
+supabase/.temp/
